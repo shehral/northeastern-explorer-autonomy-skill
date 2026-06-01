@@ -1,0 +1,26 @@
+{
+  "skill_name": "northeastern-explorer-autonomy",
+  "evals": [
+    {
+      "id": 0,
+      "name": "overnight-self-managing-run",
+      "prompt": "I'm on the Northeastern Explorer cluster and want to run a GPU experiment overnight that submits follow-up jobs as results land, without me babysitting it. Write me the SLURM sbatch file and explain the setup plus the guardrails so it won't blow through my whole GPU allocation if something breaks.",
+      "expected_output": "A correct Explorer sbatch (gpu partition, h200 gres, account, time within cap, logs under /projects allocation) WITH offline-mode env vars and a pre-cache step; plus an explanation of smoke-test gate, daily H200-hour budget cap, and the 3-fail auto-rollback guardrails, and login-node cautions.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "heartbeat-monitor-setup",
+      "prompt": "Set up an autonomous heartbeat loop in my Claude Code session so it checks my SLURM jobs on Explorer roughly every 30 minutes and submits the next experiment when one finishes. How do I schedule it, and how do I watch long-running jobs reliably so I don't miss a completion?",
+      "expected_output": "Use a persistent Monitor on the SLURM log filtered to terminal states (with persistent:true for >1h jobs, and noting a missing log file is not a dead-monitor signal); schedule via cron (CronCreate) / /loop / the /schedule skill with a 1200-1800s interval and never 300s; a bounded tick (call/word cap); and how heartbeat + Monitor compose.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "garbage-output-and-noop-debug",
+      "prompt": "My vision-language model loads fine on the Explorer compute nodes but then generates pure garbage, and separately an overnight intervention bake-off wasted hours producing identical outputs across every condition. What's going on with each, and how do I prevent both from happening again?",
+      "expected_output": "Garbage = compute nodes have no internet/proxy, so without HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE + local_files_only the load silently falls back to meta-init zeros (fix: pre-cache on login node + force offline). Identical outputs = the intervention never actually fired (the end-to-end wiring check: assert with-vs-without output differs before trusting a null). Bonus: clean output dir on bug-fix resubmit.",
+      "files": []
+    }
+  ]
+}

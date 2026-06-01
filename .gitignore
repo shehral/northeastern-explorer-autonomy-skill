@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editor / OS cruft
+*.swp
+*~
+.idea/
+.vscode/
+
+# Local skill-creator eval workspaces (keep evals/evals.json + evals/BENCHMARK.md;
+# ignore generated run artifacts if you grade locally inside the repo)
+*-workspace/
+review.html

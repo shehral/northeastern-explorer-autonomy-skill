@@ -1,0 +1,20 @@
+{
+  "_doc": "G4 daily H200-hour budget ledger. Keyed by local date (pick ONE timezone; it defines the midnight reset boundary). h200_hours_used is the sum of the day's job elapsed_hours. The decision loop reads remaining-today before any T1 submit; pause T1 when it goes negative. Write atomically (tmp + rename), stdlib-only.",
+  "soft_cap_h200_hours_per_day": 24.0,
+  "by_day": {
+    "2026-01-01": {
+      "h200_hours_used": 0.0,
+      "jobs": [
+        {
+          "slurm_id": "0000000",
+          "name": "example-job",
+          "elapsed_hours": 0.0,
+          "state": "COMPLETED",
+          "submitted_at": "2026-01-01T00:00:00-08:00"
+        }
+      ]
+    }
+  },
+  "_last_updated": "2026-01-01T00:00:00-08:00",
+  "_format_version": 1
+}
