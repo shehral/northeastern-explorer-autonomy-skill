@@ -13,6 +13,7 @@ anatomy, and loader gotchas. Replace the `Customization Points` values from `SKI
 5. Partitions, GPUs, walltime, queue hygiene
 6. Canonical sbatch anatomy
 7. Loader gotchas (bf16, attn impl, the `lm_head` tie fix)
+8. Troubleshooting / field-tested failure modes (connection auth, smoke gate, node launch-kills, walltime/partition sizing)
 
 ---
 
@@ -23,13 +24,27 @@ ssh <user>@login.explorer.northeastern.edu        # SSH_TARGET
 ```
 
 - **ControlMaster** reuses one authenticated tunnel for ~8h across all `ssh`/`scp`/
-  `rsync`. Set it in `~/.ssh/config` (a `Host explorer` alias is convenient). **Duo**
+  `rsync`. Set it in `~/.ssh/config` (a `Host <alias>` block is convenient). **Duo**
   two-factor is required only on the first cold connect or after the 8h window.
-- From an autonomous session, probe non-interactively so auth failures fail fast:
-  `ssh -o BatchMode=yes -o ConnectTimeout=10 explorer 'squeue -u <user>'`. If this
-  hangs or errors, the human needs to re-clear Duo — surface it, don't retry blindly.
+- **Key auth can bypass MFA — try the non-interactive probe FIRST (field-tested, L1).**
+  If the user's `Host <alias>` block has an authorized `IdentityFile` plus
+  `ControlMaster auto` + `ControlPersist`, a non-interactive
+  `ssh -o BatchMode=yes -o ConnectTimeout=10 <alias> 'squeue -u <user>; sinfo -p gpu'`
+  authenticates **by key with no Duo prompt**, and that first call also **opens the
+  persistent master socket** that every later `ssh`/`scp`/`rsync` reuses. So the
+  Quick-Start "ssh once to clear Duo" is the *fallback*: try the `BatchMode` key-auth
+  probe via the alias first, and only drop to an interactive MFA login if the key turns
+  out not to be authorized (the probe errors with a publickey/permission failure rather
+  than succeeding). If it merely hangs, the human needs to re-clear Duo — surface it,
+  don't retry blindly.
+- **GOTCHA — always connect via the configured ALIAS, never the raw hostname (L1).**
+  `ssh <user>@login.explorer.northeastern.edu` bypasses the `Host <alias>` block, so it
+  picks up **none** of the `IdentityFile`/`ControlMaster`/`ControlPersist` config and
+  fails with a `GSSAPI`/`Permission denied` error. The raw hostname is only the value of
+  `HostName` *inside* the alias block; drive every connection (and every probe) through
+  `<alias>`.
 - **Stale socket** (after a WiFi/IP change): remove the control socket
-  `~/.ssh/control-*explorer*` and reconnect once.
+  `~/.ssh/control-*<alias>*` and reconnect once.
 
 **Login-node limits:** the login node has a **~8 GB effective RAM
 cap** and will SIGKILL (`exit 137`) heavy work. **Never** load the model, run a big
@@ -110,7 +125,7 @@ proc  = AutoProcessor.from_pretrained(MODEL_ID, revision=REVISION, local_files_o
 ```
 
 The login-node proxy (for pre-caching only) looks like:
-`export http_proxy=http://10.99.0.130:3128 https_proxy=http://10.99.0.130:3128`
+`export http_proxy=http://<squid-proxy-ip>:3128 https_proxy=http://<squid-proxy-ip>:3128`
 (+ upper-case variants, `no_proxy=localhost,127.0.0.1`). Set it explicitly in the
 preload script; do not rely on inheritance.
 
@@ -165,3 +180,118 @@ the work         → $PYTHON code/<script>.py --args ...
   **If you adapt this skill for a different model, this fix is likely unnecessary or
   different — delete or replace it.** It's the clearest example of a Customization
   Point that is model-specific, not cluster-specific.
+
+## 8. Troubleshooting / field-tested failure modes
+
+These are the failure modes the skill hit on its first real end-to-end run. Each is
+named so you can match a symptom to a recovery without re-deriving it, and each notes
+whether it is an **agent-code** bug (counts toward the G5 failure streak) or an
+**infrastructure** failure (does **not** count — see `autonomy-model.md` §G5).
+
+### 8.1 Connection auth fails or prompts unexpectedly (L1)
+See §1 for the full mechanics. The two field-tested checks, in order:
+1. **Probe with `BatchMode` via the ALIAS first** — key auth often clears with no Duo
+   prompt and opens the persistent master socket in the same call. Interactive MFA is
+   the fallback, not the default.
+2. **If you get `GSSAPI`/`Permission denied`, you almost certainly used the raw
+   hostname.** Re-run through `<alias>`, which is the only path that loads the
+   `IdentityFile`/`ControlMaster` config.
+
+Infrastructure, not agent code — a failed connect never increments the G5 streak.
+
+### 8.2 Smoke gate (G1): smoke via `sbatch`, not only `srun` (L2)
+**Symptom you want to avoid:** a job passes an interactive `srun` smoke and then **dies
+at launch** the moment it's submitted as a real `sbatch`.
+
+**Why `srun` alone is insufficient:** an interactive `srun` smoke streams stdout back
+over your SSH session and writes **no `--output` file**. So it exercises neither
+output-file creation nor the full `sbatch` node prolog/launch path — exactly the steps
+that produce the launch failures in §8.3. A job can be green under `srun` and dead under
+`sbatch`.
+
+**Rule:** the **G1** smoke gate must validate the **actual artifact you will submit**.
+Include at least one real `sbatch` submission (tiny inputs, `gpu-short`, short `--time`)
+that writes to a real `--output` path — not only an `srun` stream. This is the cheap
+form of the end-to-end wiring check, applied to the launch path itself.
+
+### 8.3 Node launch-kill — sbatch dies in seconds with no log (L3)
+A named, recurring **infrastructure** failure. Do **not** "fix" your code for it; if you
+treat it as an agent-code bug you both waste time and wrongly increment the **G5**
+streak.
+
+**Symptom (the fingerprint):**
+- The `sbatch` job dies in **~1–5 s** with `State=FAILED`.
+- `sacct` shows the **`.batch` step `CANCELLED`** with a **signal-style `ExitCode`**
+  (e.g. `0:53`), while the **`.extern` step is `COMPLETED`**.
+- **No `--output`/`--error` log is written** — the job was killed *before your script's
+  first line ran*, so there is nothing in the logs to debug.
+
+This is a **node-level launch failure**: the node failed to bring the job up. It is not
+a code bug and it is not preemption.
+
+**Diagnostic ladder — run these before changing any code:**
+```bash
+# (a) Which node(s) did it land on?
+ssh <alias> 'sacct -j <jobid> --format=JobID,State,ExitCode,NodeList -P'
+
+# (b) Minimal canary: no model, tiny --mem, short --time, trivial payload.
+#     If the SAME script succeeds on a DIFFERENT node, the original node(s) are bad.
+ssh <alias> 'srun -p gpu-short --time=00:02:00 --mem=2G --gres=gpu:h200:1 \
+    --account=<slurm-account> bash -lc "hostname; nvidia-smi -L; echo canary-ok"'
+
+# (c) Rule out SYSTEMIC causes so you don't mis-fix a node problem:
+ssh <alias> 'scontrol show reservations'      # free slots reserved for another partition?
+ssh <alias> 'scontrol show config | grep -i preempt'   # PreemptMode
+ssh <alias> 'sacctmgr show qos -P'            # QOS limits
+#  + confirm the --output dir is writable, and rule out any cron/watchdog killing jobs.
+```
+
+**Fix:** exclude the bad node(s) and resubmit unchanged:
+```
+#SBATCH --exclude=<bad-nodes>
+```
+(`<bad-nodes>` = the `NodeList` from step (a), comma-separated.) If the canary in (b)
+also fails on a fresh node, the cause is systemic (step (c)), not a single bad node —
+escalate rather than excluding the whole partition.
+
+**G5 classification:** infrastructure. Does **not** count toward the failure streak.
+
+### 8.4 Walltime / partition sizing + short-partition timeout recovery (L4)
+**(a) A short-walltime partition can TIMEOUT a job that actually finished its real
+work** but ran out of clock during the final aggregation/write step. Defend against
+this *before* it happens and recover cheaply *after*:
+- **Write per-item outputs as you go, idempotently (skip-existing).** Then the
+  expensive GPU work is durable the moment each item lands.
+- **If you time out near the end, do NOT re-run on GPU.** Re-aggregate **CPU-only on the
+  login node** from the per-item files — the per-item results already exist, so the
+  final table costs seconds, not another H200-hour. (This is the same per-item /
+  idempotent pattern as the resumable-sweep note in §5.)
+
+**(b) "Idle" does not mean "available" on a short partition.** A `gpu-short`-style
+partition often shares physical nodes with the main `gpu` partition, and free slots can
+be **reserved for higher-priority partitions** — so even a tiny job **pends** or gets
+**launch-killed** (§8.3) despite the node looking idle. Before assuming availability,
+check:
+```bash
+ssh <alias> 'scontrol show reservations'
+ssh <alias> 'scontrol show config | grep -i preempt'   # PreemptMode
+```
+
+**(c) Size `--time` from the smoke, and don't undercut it.** Shorter walltime backfills
+faster and schedules sooner, but estimate the real runtime from the **per-item time
+measured in the G1 smoke** × item count, plus margin for load/aggregation. Undercutting
+that estimate just buys you a §8.4(a) timeout.
+
+**G5 classification:** a walltime-timeout of code that did its real work, and
+partition-contention pends/launch-kills, are **infrastructure** — they do **not** count
+toward the failure streak.
+
+### 8.5 What counts as a G5 streak failure (L5 — reinforced)
+The failure modes in §8.1, §8.3, and §8.4 — **connection auth failures, node
+launch-kills, walltime-timeouts of working code, and partition contention** — are
+**infrastructure**, not agent-code bugs. They must **not** increment the G5
+consecutive-failure streak (`.failure_streak.json`). Record each explicitly with
+`counted_in_streak: false`. Only a genuinely new bug in agent-written code (e.g. an OOM
+you introduced in preprocessing, a wrong wrapper, a logic error) increments the streak.
+When in doubt, ask: *"did my code have a bug, or did the cluster misbehave?"* See
+`autonomy-model.md` §G5 for the canonical rule and ledger shape.

@@ -83,15 +83,25 @@ guardrails are portable; only the connection/env/partition details change.
 
 ## Quick start (a single autonomous run, start to finish)
 
-1. **Connect & verify the session is warm.** `ssh $SSH_TARGET` once to clear Duo and
-   open the ControlMaster socket (reused for 8h). Confirm with a `BatchMode` probe:
-   `ssh -o BatchMode=yes $SSH_TARGET 'squeue -u <user>; sinfo -p gpu'`. See
-   `references/cluster-setup.md` §1.
+1. **Connect & verify the session is warm — try key-auth via the alias first.** If you
+   have an SSH-config `Host <alias>` block (authorized `IdentityFile` +
+   `ControlMaster auto` + `ControlPersist`), a non-interactive
+   `ssh -o BatchMode=yes <alias> 'squeue -u <user>; sinfo -p gpu'` authenticates **by
+   key with no MFA prompt** and opens the persistent master socket in the same call —
+   so this single probe both connects and confirms warmth. Only if the key is **not**
+   authorized do you fall back to an interactive `ssh <alias>` to clear Duo (reused for
+   8h). **Always go through the configured `<alias>`, never the raw hostname** —
+   connecting by hostname bypasses the `IdentityFile`/`ControlMaster` config and fails
+   with a GSSAPI `Permission denied`. See `references/cluster-setup.md` §1.
 2. **Pre-cache the model on the LOGIN node** (compute nodes are offline — see G-rule
    below). `references/cluster-setup.md` §2. Never load the model on the login node
    itself; it has a ~8 GB effective RAM cap and will OOM-kill you.
-3. **Smoke-test the experiment locally or on `gpu-short`** for ~60s on one input
-   **before** any `gpu` submission (Guardrail G1; ~5000:1 cost asymmetry).
+3. **Smoke-test the experiment on `gpu-short`** for ~60s on one input **before** any
+   `gpu` submission (Guardrail G1; ~5000:1 cost asymmetry). Validate the **actual
+   artifact you'll submit**: include at least one real `sbatch` smoke, not only an
+   interactive `srun` — `srun` streams stdout over SSH and writes no output file, so it
+   silently skips the failures (output-file creation, node prolog/launch) that only
+   appear under `sbatch`.
 4. **Compose the sbatch from `assets/job_template.sbatch`** — it already encodes the
    pinned modules, the PATH-export env activation, mandatory offline flags, cache
    paths, determinism, a pre-flight model-cache check, and a SIGTERM save-hook.
@@ -123,6 +133,31 @@ AutoModel...from_pretrained(MODEL_ID, revision=REV, local_files_only=True)  # in
 Pre-caching (step 2) and offline-mode (this rule) are an inseparable pair — neither
 works without the other. Full reasoning in `references/cluster-setup.md` §4.
 
+### Field-tested gotchas (from the first real end-to-end run)
+
+These are **infrastructure** failures — none of them increments the G5 streak. Diagnose
+before "fixing" the wrong layer; full recipes in `references/cluster-setup.md`.
+
+- **Node launch-kills.** Symptom: an `sbatch` job dies in 1–5s with `State=FAILED`, the
+  `.batch` step `CANCELLED`, a signal-style `ExitCode` (e.g. `0:53`), the `.extern` step
+  `COMPLETED`, and **no output log** (killed before the script's first line). This is a
+  bad **node**, not a code bug or preemption. Diagnostic ladder: get the node from
+  `sacct` `NodeList`; run a **minimal canary** (no model, tiny mem, short time, trivial
+  payload) — if it succeeds on a *different* node, the original node(s) are bad; rule out
+  systemic causes (cluster `PreemptMode`, QOS limits, active reservations via
+  `scontrol show reservations`, output-dir writability, any cron/watchdog) so you don't
+  mis-fix. Fix: add `#SBATCH --exclude=<bad-nodes>` and resubmit.
+- **Short-partition timeout + reservation sizing.** A short-walltime partition can
+  **TIMEOUT a job that finished its real work** but not the final aggregation/write.
+  Defend by writing per-item outputs as you go (idempotent skip-existing) and aggregating
+  from them; if you time out near the end, **re-aggregate CPU-only on the login node**
+  from the per-item files — no GPU re-run. A "short" partition often shares physical
+  nodes with the main GPU partition, and free slots can be **reserved for a
+  higher-priority partition**, so even a tiny job pends or gets launch-killed — check
+  `scontrol show reservations` and partition `PreemptMode` before assuming "idle ==
+  available." Shorter walltime backfills better, but estimate real runtime from the
+  smoke's per-item time and don't undercut it.
+
 ## The autonomy model (how to decide what to do without asking)
 
 Classify every candidate action into a **tier**, and gate the auto-acting tier behind
@@ -143,7 +178,7 @@ The **five guardrails** that gate T1:
 
 | | Guardrail | Threshold |
 |---|---|---|
-| **G1** | Smoke-test gate | 60s single-input run passed, or script unchanged from a prior success |
+| **G1** | Smoke-test gate | 60s single-input run passed **via at least one real `sbatch`** (not only `srun` — `srun` writes no output file and skips launch/prolog failures), or script unchanged from a prior success |
 | **G2** | Pre-registration | falsification criteria written **before** the run |
 | **G3** | Info-gain | experiment discriminates between live hypotheses (≥ 0.3 if you score it) |
 | **G4** | Daily compute budget | under `DAILY_GPU_BUDGET` H200-h today (`.compute_budget.json`) |
@@ -152,7 +187,12 @@ The **five guardrails** that gate T1:
 G5's subtlety: **infrastructure failures don't count** (HF timeout, scp race, a
 walltime-kill of code that was working). Only new agent-written-code bugs increment the
 streak. This prevents bug-loops — the most expensive autonomous failure mode — while
-not punishing the agent for the cluster being flaky.
+not punishing the agent for the cluster being flaky. Concrete examples that are
+**infrastructure, not agent-code, and must NOT increment the streak**: a **node
+launch-kill** (job dies in 1–5s with no log written), a **walltime-timeout of code that
+finished its real work** but not the final aggregation, and **partition contention** (a
+tiny job pends or gets launch-killed because free slots are reserved for a
+higher-priority partition). See the field-tested gotchas below.
 
 ## The safety layer (make the verified path the only path)
 

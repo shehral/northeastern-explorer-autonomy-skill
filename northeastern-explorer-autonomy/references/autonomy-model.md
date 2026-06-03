@@ -48,8 +48,15 @@ allocations). Write these to a `USER_INPUT_TRACKER.md` OPEN list and wait.
 
 **G5's classification rule is load-bearing:** only **new agent-written-code bugs**
 increment the streak. **Infrastructure failures do NOT count** — HF API timeout, scp
-race, node OOM, a walltime-kill of code that was working. When in doubt, ask: "did my
-code have a bug, or did the cluster misbehave?" Record the classification explicitly.
+race, node OOM, a walltime-kill of code that was working, a **node launch-kill** (sbatch
+dies in seconds with a signal-style ExitCode and no log written — the node failed before
+your first line ran, fix: `--exclude` the bad node), a **walltime-timeout of working
+code** (the job finished its real work but the short partition cut it off before the
+final aggregation; recover by re-aggregating on the login node, no code change), and
+**partition contention** (a tiny job pends or gets launch-killed because free slots are
+reserved for a higher-priority partition — see `scontrol show reservations` /
+`PreemptMode`, not your code). When in doubt, ask: "did my code have a bug, or did the
+cluster misbehave?" Record the classification explicitly.
 
 ## Supporting safety rules (the load-bearing few)
 
