@@ -56,7 +56,7 @@ stays idempotent if a tick re-runs after a crash.
 |---|---|---|
 | `/loop <prompt>` (no interval, self-paced) | Let the model self-pace each iteration; it picks the delay per the cache-window rule below and repeats the tick. | Session-only (ends with the session). |
 | `/loop 30m <prompt>` (fixed interval) | Interval-driven recurring task in an active session; good fallback to re-arm after a session break. | Session-only. |
-| `CronCreate(cron, prompt, recurring=True)` | Fixed wall-clock cadence (e.g. `7,37 * * * *`). Offset minutes (`:07`/`:37`, not `:00`/`:30`) to avoid thundering-herd collisions. | Session-only unless `durable: true`. |
+| `CronCreate(cron, prompt, recurring=True)` | Fixed wall-clock cadence (e.g. `7,37 * * * *`). Offset minutes (`:07`/`:37`, not `:00`/`:30`) to avoid thundering-herd collisions. | Session-only; restored on `--resume` until it expires (the `durable` flag is a no-op in some versions). |
 | Desktop scheduled task | A durable local tick with your files and SSH config. It needs the machine on, and key auth with no MFA (see "overnight auth"). | Durable (local). |
 | `/schedule` (cloud routine) | Cluster-free work only. A routine runs in a fresh cloud clone with no local files and cannot use your SSH key or clear Duo, so it cannot reach Explorer. | Durable (cloud). |
 

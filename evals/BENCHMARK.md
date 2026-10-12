@@ -51,7 +51,7 @@ most discriminating. The baseline has no way to know that a key-auth probe via t
 SSH-config alias skips MFA, that a seconds-fast signal-style launch-kill is a *node*
 fault rather than a code bug or preemption, that a short-partition timeout of working
 code is recoverable by CPU-job re-aggregation, that `QOSMaxGRESPerJob` never clears,
-that raising a TimeLimit is admin-only, or that watchers are not restored on resume. All
+that only a pending job's TimeLimit can be raised by its owner, or that watchers are not restored on resume. All
 of that is tacit cluster knowledge, so they should widen the delta, not narrow it.
 
 ## What the baseline missed

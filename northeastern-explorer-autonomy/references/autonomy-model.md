@@ -82,9 +82,9 @@ classification explicitly.
 | `FAILED` + Python traceback in `.err` | agent code | yes |
 | Login-node command produced **no output at all** | silent login-node SIGKILL (`cluster-setup.md` §1) — infrastructure | no |
 | Job "succeeded" but with-vs-without outputs are identical | silent no-op — agent code (wiring bug; see the end-to-end check) | yes |
-| `NODE_FAIL`, `CANCELLED` by admin, HF 5xx during pre-cache | infrastructure | no |
+| `NODE_FAIL`, `CANCELLED` by admin (confirm it was not IdleBot: an admin cancel can also show uid 0, so check `gpu-logs <id>` or the IdleBot email first), HF 5xx during pre-cache | infrastructure | no |
 | `FAILED` in 1-5 s, `.batch` `CANCELLED`, signal ExitCode, no log | node launch-kill (`cluster-setup.md` §9.3) — infrastructure | no |
-| `CANCELLED by 0`, batch exit 15, after about 1 h of low GPU use (IdleBot email; `gpu-logs <id>`) | CPU phase inside a GPU job — agent design | yes |
+| Observed: `CANCELLED by 0`, batch exit 15, after about 1 h of low GPU use (confirm with the IdleBot email or `gpu-logs <id>`) | CPU phase inside a GPU job — agent design | yes |
 | `FAILED` at the first CUDA op with `no kernel image is available` | env lacks this GPU's arch — route to a supported type (`cluster-setup.md` §5.1); agent code | yes |
 | Pending with reason `QOSMaxGRESPerJob` | more GPUs per job than the partition allows; it never starts. Cancel and resize (`cluster-setup.md` §5) | no |
 | `COMPLETED` / exit 0 but zero items written, or fewer than requested | missing fail-loud check (empty input, a truncated `--export` list) — agent code | yes |

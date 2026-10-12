@@ -247,8 +247,9 @@ MaxTRES is the per-job cap, and `scontrol show partition <p>`; re-check, they ch
   about 15 min, and `gpu-logs <jobid>` shows the record. CPU-heavy phases (statistics,
   probe fits, aggregation, data prep) go to `-p short`, never inside a GPU allocation.
   Log GPU utilisation every few minutes (the template logs `gpu-util:` lines every 5 min),
-  and check in the smoke that the GPU is busy once loading ends. Symptom in `sacct`:
-  `CANCELLED by 0`, with the batch step at exit 15. Policy:
+  and check in the smoke that the GPU is busy once loading ends. Observed symptom in `sacct`
+  (one field observation; the policy page does not list it): `CANCELLED by 0`, with the
+  batch step at exit 15. Policy:
   rc-docs.northeastern.edu/en/explorer-main/gpus/idlebot.html; `gpu-logs` keeps the
   record for 7 days. A pipeline with a CPU-heavy middle becomes three jobs: GPU, then CPU
   on `short`, then GPU, chained with `afterok`.
@@ -543,10 +544,10 @@ free. Choose the type with §5.1, which reads free GPUs per node and your caps.
 **(c) Size `--time` from the smoke, and don't undercut it.** Shorter walltime backfills
 faster and schedules sooner, but estimate the real runtime from the **per-item time
 measured in the G1 smoke** × item count, plus margin for load/aggregation. Undercutting
-that estimate just buys you a §9.4(a) timeout. You can lower a job's limit
-(`scontrol update JobId=<id> TimeLimit=<t>`), but raising it is admin-only, whether the
-job is pending or running (`man scontrol`). So size `--time` at submit, and make long
-jobs resumable rather than padding them to the cap.
+that estimate just buys you a §9.4(a) timeout. You can lower a job's limit, and raise a **pending** job's limit yourself up to the
+partition maximum (`scontrol update JobId=<id> TimeLimit=<t>`; verified 2026-10-12).
+Raising a **running** job's limit is admin-only (`man scontrol`). So size `--time` at
+submit, and make long jobs resumable rather than padding them to the cap.
 
 **G5 classification:** a walltime-timeout of code that did its real work, and pending
 time, are **infrastructure** — they do **not** count toward the failure streak.

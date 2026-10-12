@@ -85,8 +85,8 @@ now merged three-way with the initial commit as the base:
 - G5: pending time is infrastructure; an IdleBot cancellation of a job with a long CPU
   phase in a GPU allocation counts as agent design. An OOM follows the triage row, so
   "node OOM" is no longer listed as infrastructure.
-- Raising a job's TimeLimit is admin-only, pending or running (`man scontrol`); size
-  `--time` at submit.
+- A pending job's TimeLimit can be raised by its owner up to the partition maximum; a
+  running job's only by an admin. Size `--time` at submit.
 - Output dir on resubmit: resume in place after a timeout or node failure; use a fresh
   dir after a code fix.
 - Connection goes through an `SSH_ALIAS` Customization Point. The proxy address is a
