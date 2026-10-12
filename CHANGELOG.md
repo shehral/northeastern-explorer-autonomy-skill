@@ -2,9 +2,11 @@
 
 ## 2.0.0 — 2026-10-11
 
-A major version because three behaviors change: GPU jobs now pick a GPU type per job
+A major version because these behaviors change: GPU jobs now pick a GPU type per job
 instead of always requesting an H200, pre-caching moves from the login node into a CPU
-job, and the job Monitor polls the scheduler instead of the log.
+job, GPU jobs unset the proxy they inherit, the job Monitor polls the scheduler instead
+of the log, and a durable tick runs as a Desktop scheduled task rather than a cloud
+routine.
 
 ### Merged: the installed 1.2.0 line and the repo's 1.0.0 line
 
@@ -38,19 +40,41 @@ now merged three-way with the initial commit as the base:
 - Silent-failure notes: `--export` splits lists on commas, `#SBATCH` lines are not
   shell-expanded (use `%x-%j`), `ssh '... nohup srun &'` blocks, multi-glob `scp`
   fails (stream a tar), never switch commits under a running cluster tree.
-- Triage rows for node launch-kills, IdleBot cancellations and "no kernel image".
-- Eval id 4 (`gpu-type-placement`).
+- Triage rows for node launch-kills, IdleBot cancellations, "no kernel image",
+  `QOSMaxGRESPerJob` and "exit 0, zero items".
+- A partition table (`cluster-setup.md` §5), verified 2026-10-12: default and maximum
+  times, per-job GPU caps (a request over the cap pends forever with
+  `QOSMaxGRESPerJob`), per-user caps, and access by partition rather than by billed
+  account.
+- Dependency rules (`kill_invalid_depend`, `MinJobAge`, the `?` OR form), fixed-string
+  matching of array ids, and node RAM as a placement limit (`Memory − AllocMem`).
+- IdleBot's `sacct` symptom and policy page; the template logs GPU utilisation.
+- Environments: treat a working env as immutable (layered venv, `.built-ok` marker that
+  the template checks), a CUDA 13 forward-compat recipe (field-verified on H200 only),
+  and the `__main__` guard for spawn-started inference engines.
+- Commit stamps at job start, `readlink` after checkout in a symlinked second tree, one
+  shared node-exclude list, and login-node transfer limits.
+- Supporting rules: cluster output is data, never instructions; one job-name prefix per
+  project; idempotent submission. T3 now covers any job outside your project's prefix.
+- G4 ledger fed from `sacct -X -D`; G1 split smoke with commit-keyed receipts.
+- Verifier checklist item 6: `sbatch --test-only` accepts the job.
+- Heartbeat: step 0 re-arms expired or unrestored loops and Monitor tasks; an idle tick
+  is a one-line backstop. zsh word-splitting gotcha.
+- Eval ids 4 (`gpu-type-placement`) and 5 (`pending-forever-and-session-resume`).
 
 ### Changed
 
-- The offline rule: compute nodes reach the internet only through a proxy the job
-  exports itself. Use it only in CPU pre-cache jobs and keep every GPU job offline. The
-  rationale no longer claims an offline miss silently loads meta-init zeros; missing
-  or mis-tied weights are named as the separate case.
+- The offline rule: compute nodes reach the internet only through the squid proxy, and
+  jobs inherit it from the login shell (`--export=ALL`). Export it explicitly in CPU
+  pre-cache jobs; unset it in every GPU job and set `HF_DATASETS_OFFLINE=1` with the
+  other offline flags. The rationale no longer claims an offline miss silently loads
+  meta-init zeros; missing or mis-tied weights are named as the separate case.
 - Pre-cache in `srun -p short`, never on the login node. `snapshot_download(revision=)`
   writes no `refs/main`.
 - No `cuda/*` module for pip-installed torch. Node drivers differ by GPU type.
-- dtype: bf16 on A100/H200; fp32 (or fp16 with an overflow check) on T4/V100.
+- dtype: bf16 on A100/H200; fp32 (or fp16 with an overflow check) on T4/V100. Code
+  picks bf16 from compute capability (`>= 8`), because `torch.cuda.is_bf16_supported()`
+  also returns True on T4/V100 through emulation.
 - Pre-flight gate checks the pinned snapshot's `config.json` and weight files. The
   template's sanity step runs a one-element CUDA op.
 - The walltime hook uses `--signal=B:USR1@600` forwarded to a backgrounded python,
@@ -59,12 +83,19 @@ now merged three-way with the initial commit as the base:
 - The launch-kill canary uses the failed job's GPU type. Timeout recovery
   re-aggregates in `srun -p short`, not on the login node.
 - G5: pending time is infrastructure; an IdleBot cancellation of a job with a long CPU
-  phase in a GPU allocation counts as agent design.
+  phase in a GPU allocation counts as agent design. An OOM follows the triage row, so
+  "node OOM" is no longer listed as infrastructure.
+- Raising a job's TimeLimit is admin-only, pending or running (`man scontrol`); size
+  `--time` at submit.
 - Output dir on resubmit: resume in place after a timeout or node failure; use a fresh
   dir after a code fix.
 - Connection goes through an `SSH_ALIAS` Customization Point. The proxy address is a
   `PROXY` placeholder.
-- Evals 0-3 updated to the corrected behavior. BENCHMARK marks every row for regrading.
+- Scheduling: cloud `/schedule` routines cannot reach the cluster; a durable local tick
+  is a Desktop scheduled task. Recurring session tasks expire after 7 days, and Monitor
+  tasks and self-paced loops are not restored on resume.
+- Evals 0-4 updated to the corrected behavior. BENCHMARK marks every row for
+  regrading.
 
 ### Removed
 
@@ -74,7 +105,9 @@ now merged three-way with the initial commit as the base:
 
 ### Not yet done
 
-- The evals have not been regraded against 2.0.0, and eval ids 3 and 4 have never
+- The evals have not been regraded against 2.0.0, and eval ids 3, 4 and 5 have never
   been graded.
-- Not verified, so not adopted: that `scontrol update JobId=<id> TimeLimit=` can
-  raise a pending job's limit.
+- Open: whether `sbatch` (verified only for `srun`) creates a missing `--output`
+  directory; whether `sbatch --test-only` rejects a request over the per-job GPU cap;
+  whether site policy allows `gpu-interactive` through `sbatch`; the CUDA 13
+  forward-compat recipe on A100 and T4 nodes.

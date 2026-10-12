@@ -13,7 +13,7 @@ Ad-hoc autonomous cluster use hits a small set of failure modes that are expensi
 
 ## Evidence it helps
 
-The `evals/` folder contains five scenario prompts (an overnight self-managing run, a heartbeat/monitor setup, a garbage-output plus no-op debugging task, a first-real-run field test, and a GPU-type placement task) with assertion checklists, plus the measured results in `evals/BENCHMARK.md`. Only the first three have been graded, and against the v1.0 expectations; see BENCHMARK.md.
+The `evals/` folder contains six scenario prompts (an overnight self-managing run, a heartbeat/Monitor setup, a garbage-output plus no-op debugging task, a first-real-run field test, a GPU-type placement task, and a job pending forever on the per-job GPU cap plus a resumed session) with assertion checklists, plus the measured results in `evals/BENCHMARK.md`. Only the first three have been graded, and against the v1.0 expectations; see BENCHMARK.md.
 
 | Metric | With skill | Without skill | Delta |
 |--------|-----------|---------------|-------|
@@ -112,7 +112,7 @@ northeastern-explorer-autonomy/        <- THE SKILL; copy this folder into ~/.cl
 | `assets/job_template.sbatch` | The canonical fill-in-the-blanks SLURM job. Encodes the pinned module, PATH-export activation, a per-job GPU type, mandatory offline flags, cache paths on the allocation, cuBLAS determinism, a one-op CUDA sanity check, a GPU-utilisation logger (IdleBot), a pinned-snapshot pre-flight gate, and an early-signal checkpoint hook. **Copy and fill the `<…>` / `CUSTOMIZE` fields for each new job.** |
 | `assets/compute_budget.json` | Starter G4 ledger with the exact schema the budget guardrail expects (daily GPU-hour cap, hours per GPU type, per-day job list, atomic-write note). **Copy into your project and let the session update it; edit the soft cap to your budget.** |
 | `assets/failure_streak.json` | Starter G5 ledger with the schema for the consecutive-failure rollback (current/max streak, rollback flags, history with the `counted_in_streak` agent-vs-infrastructure tag). **Copy into your project; the human resets it after a rollback, never the agent.** |
-| `evals/evals.json` | Five scenario prompts with expected-output assertion checklists used to grade the skill. **Read or run when you want to verify or extend the quality evidence.** |
+| `evals/evals.json` | Six scenario prompts with expected-output assertion checklists used to grade the skill. **Read or run when you want to verify or extend the quality evidence.** |
 | `evals/BENCHMARK.md` | The measured with-skill vs no-skill results summarized above. **Read for the evidence; regenerate when you change the skill.** |
 
 ## How to use it

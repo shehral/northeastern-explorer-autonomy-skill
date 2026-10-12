@@ -5,10 +5,11 @@ skill than without it, on the failure modes the skill is meant to prevent.
 
 ## Method
 
-- **Prompts:** the five scenarios in `evals.json` (an overnight self-managing run, a
+- **Prompts:** the six scenarios in `evals.json` (an overnight self-managing run, a
   heartbeat/Monitor setup, a garbage-output + silent-no-op debugging task, a
   first-real-run field test covering key-auth connection, a node launch-kill diagnosis,
-  and short-partition timeout recovery, and a GPU-type placement task).
+  and short-partition timeout recovery, a GPU-type placement task, and a job pending
+  forever on the per-job GPU cap plus a resumed session that lost its watchers).
 - **Two configurations per prompt:** one session **with the skill loaded**, one
   **baseline** with no skill. Same prompt, same model class, isolated subagents.
 - **Grading:** each scenario has an assertion checklist. Assertions are checked by
@@ -32,20 +33,26 @@ Per scenario (assertions passed / total):
 | garbage-output + no-op debug | 4 / 4 | 3 / 4 |
 | first-real-run field test (connect + launch-kill + timeout) | — | — |
 | GPU-type placement (2.0.0) | — | — |
+| pending forever + session resume (2.0.0) | — | — |
 
 The with-skill responses also ran modestly longer (a small latency cost from the added
 discipline).
 
 **Regrade pending (2.0.0).** The three graded rows were scored against the v1.0
 expectations. Version 2.0.0 corrected several of those expectations (GPU jobs offline
-with a CPU-job pre-cache, a Monitor that polls `sacct`, a per-job GPU type), so the
-numbers above describe the old skill and the old checklists. The fourth scenario (the
-first-real-run field test) and the fifth (GPU-type placement) have never been graded.
-Re-run both configs on all five prompts and refill the table. It is the most discriminating of the four — the baseline has no way to know that a
-key-auth probe via the SSH-config alias skips MFA, that a seconds-fast signal-style
-launch-kill is a *node* fault rather than a code bug or preemption, or that a
-short-partition timeout of working code is recoverable by CPU-job re-aggregation. All
-three are pure tacit cluster knowledge, so it should widen the delta, not narrow it.
+with a CPU-job pre-cache and the inherited proxy unset, a Monitor that polls `sacct`,
+a per-job GPU type, dtype from compute capability, Desktop scheduled tasks rather than
+cloud routines for a durable tick), so the numbers above describe the old skill and the
+old checklists. The fourth, fifth and sixth scenarios have never been graded. Re-run
+both configs on all six prompts and refill the table.
+
+The fourth (first-real-run) and sixth (pending forever + resume) scenarios should be the
+most discriminating. The baseline has no way to know that a key-auth probe via the
+SSH-config alias skips MFA, that a seconds-fast signal-style launch-kill is a *node*
+fault rather than a code bug or preemption, that a short-partition timeout of working
+code is recoverable by CPU-job re-aggregation, that `QOSMaxGRESPerJob` never clears,
+that raising a TimeLimit is admin-only, or that watchers are not restored on resume. All
+of that is tacit cluster knowledge, so they should widen the delta, not narrow it.
 
 ## What the baseline missed
 
