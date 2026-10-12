@@ -22,7 +22,7 @@ the *shape* is what's portable):
    day-bucket.)
 2. **Consistency check.** Run your repo's drift/consistency linter first; fix drift
    before doing anything else, so you never build on an inconsistent state.
-3. **Delta audit.** `ssh -o BatchMode=yes explorer 'squeue -u <user>; sacct --starttime=now-35min ...'`
+3. **Delta audit.** `ssh -o BatchMode=yes <alias> 'squeue -u <user>; sacct --starttime=now-35min ...'`
    plus a local `ls -lt` of the results dir. Anchor to the *previous* tick's notes —
    don't recount from scratch.
 4. **Integrate landed jobs.** For each terminal job: read its result, update your claim/
@@ -80,13 +80,17 @@ Heartbeat ticks are periodic (≤ every 30 min), so a job that finishes at :09 w
 until :37 to be noticed. A **persistent Monitor** closes that gap — it fires within
 ~1 min of a terminal state:
 
-- Watch the SLURM log, filtered to terminal states:
-  `tail -f <log> | grep -E 'COMPLETED|FAILED|TIMEOUT|CANCELLED'`.
+- **Watch the scheduler, not the log.** Slurm never writes COMPLETED or FAILED into a
+  job's output file; on a time limit it writes `CANCELLED AT ... DUE TO TIME LIMIT`, not
+  "TIMEOUT"; a launch-kill writes no log at all. So poll `sacct`:
+  `until s=$(ssh -o BatchMode=yes <alias> "sacct -j <id> -X -n -o State" | head -1); echo "$s" | grep -qE 'COMPLETED|FAILED|TIMEOUT|CANCELLED|OUT_OF_MEMORY|NODE_FAIL'; do sleep 120; done; echo "$s"`.
+  The 120 s poll keeps each ssh call short. Grep the log only for your own sentinel
+  lines (e.g. the template's `=== <job> done ===`).
 - **`persistent: true` for any job > 1h** (the persistent-Monitor rule). A
   default-timeout Monitor silently dies mid-watch on a 7h job and you miss the verdict.
 - **A missing log file is NOT a dead-monitor signal.** Early on, the job is queued and
-  no compute node is allocated yet — the log doesn't exist. The Monitor should keep
-  waiting; only a terminal-state match (or an explicit stop) ends it.
+  no compute node is allocated yet — the log doesn't exist. The Monitor keeps polling
+  the scheduler; only a terminal state (or an explicit stop) ends it.
 - On fire, run a fast single-job intake (process only that job's result) rather than a
   full polling scan, then let the next tick pick up anything the Monitor queued.
 
@@ -111,8 +115,10 @@ redundancy is the point.
 
 ## The overnight auth reality (plan around it, don't fight it)
 
-The ControlMaster window (~8h) and Duo both expire without a human, and a headless
-session **cannot re-clear Duo**. So a true overnight run should be planned as:
+If the L1 `BatchMode` probe succeeds on a **cold** socket (none open yet), key auth
+needs no MFA and an overnight loop can reconnect. Otherwise the ControlMaster window
+(~8 h) is the limit, since a headless session cannot re-clear Duo: front-load
+submissions and expect a read-only gap. In that case plan the night as:
 
 1. **Front-load** the submissions while auth is warm — get every guardrail-passing
    job into the queue *before* sleep; the jobs run server-side and need nothing from
@@ -140,7 +146,7 @@ before declaring work dead:
 ## Recovering a stalled session
 
 If the session died overnight and jobs are orphaned but still running on the cluster:
-re-connect (`ssh explorer`, clear Duo), `squeue -u <user>` to see what's alive, read
+re-connect (`ssh <alias>`, clear Duo if asked), `squeue -u <user>` to see what's alive, read
 the `OVERNIGHT_AUTONOMOUS_FIRES.md` tail and the result dirs to rebuild state, then
 re-arm the loop with `/loop 30m <heartbeat prompt>`. The cluster jobs persist
 independently of the session; only the watching loop needs rebuilding.

@@ -66,7 +66,7 @@ account's values before first use** — the rest of the skill and the bundled
 
 | Point | Placeholder → set to yours | What it is |
 |---|---|---|
-| `SSH_TARGET` | `<user>@login.explorer.northeastern.edu` | your Explorer login |
+| `SSH_ALIAS` | `<alias>` | a `Host <alias>` block in `~/.ssh/config` with `HostName login.explorer.northeastern.edu`, `User <user>`, an authorized `IdentityFile`, `ControlMaster auto`, `ControlPath`, `ControlPersist 8h`. Every ssh/scp/rsync goes through the alias. |
 | `ALLOC` | `/projects/<group>/<user>` | your persistent project allocation (NOT `/scratch`, NOT `/home`) |
 | `SLURM_ACCOUNT` | `<slurm-account>` | the `--account` your allocation bills to |
 | `CONDA_ENV` | `$ALLOC/conda_envs/<conda-env>` | your pinned conda env path |
@@ -114,12 +114,14 @@ guardrails are portable; only the connection/env/partition details change.
    (`references/cluster-setup.md` §5.1). Sweeps can split across several free types.
    Compose from `assets/job_template.sbatch` — it already encodes the
    pinned modules, the PATH-export env activation, mandatory offline flags, cache
-   paths, determinism, a pre-flight model-cache check, and a SIGTERM save-hook.
+   paths, determinism, a pre-flight model-cache check, and an early-signal checkpoint hook.
 5. **Verify, then submit.** A PreToolUse hook should run a per-job verifier before the
    `sbatch` lands (see `references/safety-hooks.md`). Submitting fires a job ID.
-6. **Arm a persistent Monitor** on the SLURM log filtered to terminal states
-   (`COMPLETED|FAILED|TIMEOUT|CANCELLED`). For any job >1h, `persistent: true` —
-   a missing log file is NOT a dead-monitor signal (the persistent-Monitor rule).
+6. **Arm a persistent Monitor on the scheduler, not the log**: poll
+   `sacct -j <id> -X -n -o State` every ~120 s until a terminal state. Slurm never
+   writes COMPLETED or FAILED into the job log, and a launch-kill writes no log at all.
+   For any job >1h, `persistent: true` (the persistent-Monitor rule). See
+   `references/heartbeat-loop.md`.
 7. **On wakeup, intake the result**, update your state ledgers, record success/failure
    in the failure streak, and let the decision loop pick the next action.
 8. **If running unattended,** keep the loop alive with `/loop 30m ...` (self-paced) or
@@ -146,30 +148,32 @@ works without the other. Some libraries call the hub API even for cached files a
 crash under offline mode, which is why step 2 ends with an offline load test on a CPU
 node. Full reasoning in `references/cluster-setup.md` §2 and §4.
 
-### Field-tested gotchas (from the first real end-to-end run)
+### Field-tested gotchas
 
-These are **infrastructure** failures — none of them increments the G5 streak. Diagnose
-before "fixing" the wrong layer; full recipes in `references/cluster-setup.md`.
+The first two are **infrastructure** failures — neither increments the G5 streak.
+Diagnose before "fixing" the wrong layer; full recipes in `references/cluster-setup.md`
+§6 and §9.
 
 - **Node launch-kills.** Symptom: an `sbatch` job dies in 1–5s with `State=FAILED`, the
   `.batch` step `CANCELLED`, a signal-style `ExitCode` (e.g. `0:53`), the `.extern` step
   `COMPLETED`, and **no output log** (killed before the script's first line). This is a
   bad **node**, not a code bug or preemption. Diagnostic ladder: get the node from
   `sacct` `NodeList`; run a **minimal canary** (no model, tiny mem, short time, trivial
-  payload) — if it succeeds on a *different* node, the original node(s) are bad; rule out
-  systemic causes (cluster `PreemptMode`, QOS limits, active reservations via
-  `scontrol show reservations`, output-dir writability, any cron/watchdog) so you don't
-  mis-fix. Fix: add `#SBATCH --exclude=<bad-nodes>` and resubmit.
-- **Short-partition timeout + reservation sizing.** A short-walltime partition can
+  payload, **same GPU type** as the failed job) — if it succeeds on a *different* node,
+  the original node(s) are bad; rule out systemic causes (the job's fail reason, QOS
+  limits, output-dir writability, maintenance reservations) so you don't mis-fix. Fix:
+  add `#SBATCH --exclude=<bad-nodes>` and resubmit.
+- **Short-partition timeout of finished work.** A short-walltime partition can
   **TIMEOUT a job that finished its real work** but not the final aggregation/write.
   Defend by writing per-item outputs as you go (idempotent skip-existing) and aggregating
-  from them; if you time out near the end, **re-aggregate CPU-only on the login node**
-  from the per-item files — no GPU re-run. A "short" partition often shares physical
-  nodes with the main GPU partition, and free slots can be **reserved for a
-  higher-priority partition**, so even a tiny job pends or gets launch-killed — check
-  `scontrol show reservations` and partition `PreemptMode` before assuming "idle ==
-  available." Shorter walltime backfills better, but estimate real runtime from the
-  smoke's per-item time and don't undercut it.
+  from them; if you time out near the end, re-aggregate CPU-only from the per-item files
+  inside `srun -p short`, **never on the login node** — no GPU re-run. Size `--time` from
+  the smoke's per-item time and don't undercut it.
+- **Submission plumbing that fails silently.** `sbatch --export=ALL,IDX=1,2,3` splits on
+  the commas, so the job sees `IDX=1` and still exits 0 — pass lists through the
+  environment (`IDX=1,2,3 sbatch ...`) and assert the logged list equals the requested
+  one. `ssh <alias> 'nohup srun ... &'` holds the ssh call open until srun ends; use
+  `sbatch` for anything longer than a few seconds.
 
 ## The autonomy model (how to decide what to do without asking)
 
@@ -200,12 +204,12 @@ The **five guardrails** that gate T1:
 G5's subtlety: **infrastructure failures don't count** (HF timeout, scp race, a
 walltime-kill of code that was working). Only new agent-written-code bugs increment the
 streak. This prevents bug-loops — the most expensive autonomous failure mode — while
-not punishing the agent for the cluster being flaky. Concrete examples that are
-**infrastructure, not agent-code, and must NOT increment the streak**: a **node
-launch-kill** (job dies in 1–5s with no log written), a **walltime-timeout of code that
-finished its real work** but not the final aggregation, and **partition contention** (a
-tiny job pends or gets launch-killed because free slots are reserved for a
-higher-priority partition). See the field-tested gotchas below.
+not punishing the agent for the cluster being flaky. Infrastructure, not agent code (does not increment G5): connection/auth failures, node
+launch-kills, NODE_FAIL, a walltime timeout of code whose checkpoints were advancing, and
+pending time. **Counts as agent code:** an IdleBot cancellation of a job the agent
+designed with a long CPU-only phase inside a GPU allocation, because that is a
+job-design bug. See the field-tested
+gotchas above and `references/autonomy-model.md`.
 
 ## The safety layer (make the verified path the only path)
 

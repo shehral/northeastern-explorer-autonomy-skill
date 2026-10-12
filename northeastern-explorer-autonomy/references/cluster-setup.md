@@ -2,7 +2,7 @@
 
 Connection, storage, environment activation, the offline rule, the canonical sbatch
 anatomy, and loader gotchas. Replace the `Customization Points` values from `SKILL.md`
-(`SSH_TARGET`, `ALLOC`, `SLURM_ACCOUNT`, `CONDA_ENV`, `MODULES`, `HF_CACHE`,
+(`SSH_ALIAS`, `ALLOC`, `SLURM_ACCOUNT`, `CONDA_ENV`, `MODULES`, `HF_CACHE`,
 `MODEL_ID`/`REVISION`) throughout.
 
 ## Table of contents
@@ -20,9 +20,18 @@ anatomy, and loader gotchas. Replace the `Customization Points` values from `SKI
 
 ## 1. Connection
 
-```bash
-ssh <user>@login.explorer.northeastern.edu        # SSH_TARGET
 ```
+# ~/.ssh/config                                    # SSH_ALIAS
+Host <alias>
+    HostName login.explorer.northeastern.edu
+    User <user>
+    IdentityFile ~/.ssh/<key>
+    ControlMaster auto
+    ControlPath ~/.ssh/control-%r@%h:%p
+    ControlPersist 8h
+```
+
+Every `ssh`/`scp`/`rsync` goes through `<alias>`.
 
 - **ControlMaster** reuses one authenticated tunnel for ~8h across all `ssh`/`scp`/
   `rsync`. Set it in `~/.ssh/config` (a `Host <alias>` block is convenient). **Duo**
@@ -250,9 +259,40 @@ cache + offline  → HF_HOME/TORCH_HOME; HF_HUB_OFFLINE=1; TRANSFORMERS_OFFLINE=
 determinism      → CUBLAS_WORKSPACE_CONFIG
 sanity           → nvidia-smi | head; torch.cuda.is_available() assert
 pre-flight gate  → assert the model snapshot exists in HF_CACHE (else exit 2)  [G1 in spirit]
-SIGTERM trap     → run a POST_SAVE_HOOK to checkpoint before a walltime kill   [persistent-job rule]
-the work         → $PYTHON code/<script>.py --args ...
+early signal     → --signal=B:USR1@600; python in background + wait; trap forwards USR1
+the work         → $PYTHON code/<script>.py --args ... &   (checkpoints per item)
 ```
+
+**Walltime and signals.** At the time limit Slurm sends SIGTERM to every process in the
+job, then SIGKILL after `KillWait` (600 s on Explorer, 2026-10-11). A foreground
+`python` dies from that same SIGTERM, so a SIGTERM trap in the batch shell runs only
+after the Python state is gone. Per-item atomic checkpoints are the primary defence; for
+an in-process save, request an early signal and forward it (the template does this):
+
+```bash
+#SBATCH --signal=B:USR1@600            # USR1 to the batch shell 10 min before the limit
+$PYTHON code/<script>.py ... &         # background + wait, so the trap runs immediately
+PY=$!
+RC=0; SIG=0; TRC=0
+trap 'SIG=1; kill -USR1 $PY; wait $PY && TRC=0 || TRC=$?' USR1   # script checkpoints on SIGUSR1
+wait $PY || RC=$?                      # under set -e a bare `wait` would abort when the trap fires
+if [ "$SIG" = 1 ]; then RC=$TRC; fi
+[ "$RC" = 0 ] || exit "$RC"
+```
+
+(bash defers traps while a foreground child runs; hence `&` + `wait`. Tested locally:
+the signalled, failing and clean paths exit 0, the script's code, and 0.)
+
+**Submission plumbing that fails silently:**
+- `#SBATCH` lines are not shell-expanded. Use Slurm patterns (`%x` = job name, `%j` = job
+  id) in `--output`/`--error`, and set `--job-name` at submit time.
+- `sbatch --export=ALL,IDX=9,10,11` splits on the commas, so `IDX` becomes `9` and the
+  job still exits 0 with a plausible result. Pass lists through the environment
+  (`IDX=9,10,11 sbatch ... job.sbatch`, with the default `--export=ALL`) or use another
+  separator, and have the job log the list it parsed and assert it equals the request.
+- `ssh <alias> 'nohup srun ... &'` keeps the ssh call open until srun ends, even with
+  stdio redirected. `ssh <alias> '( srun ... > log 2>&1 < /dev/null & ); echo started'`
+  returns at once, but for anything longer than a few seconds use `sbatch`.
 
 ## 7. Loader gotchas
 
@@ -310,6 +350,10 @@ for in a near-disaster or a false alarm:
   them into result files for exactly this reason). scp races on files still being
   written are a known infrastructure failure — copy from checkpoints or after the
   job's terminal state, not from a live output file.
+- **Many remote files: stream a tar.** `scp` with several remote globs can fail with
+  "Connection closed"; `ssh <alias> 'tar cf - -C <dir> <files>' | tar xf -` works.
+- **Never check out a different commit in a cluster tree** while any job from that tree
+  is running or pending; the job reads whatever code is there when it starts.
 
 ## 9. Troubleshooting / field-tested failure modes
 
@@ -364,17 +408,20 @@ a code bug and it is not preemption.
 # (a) Which node(s) did it land on?
 ssh <alias> 'sacct -j <jobid> --format=JobID,State,ExitCode,NodeList -P'
 
-# (b) Minimal canary: no model, tiny --mem, short --time, trivial payload.
-#     If the SAME script succeeds on a DIFFERENT node, the original node(s) are bad.
-ssh <alias> 'srun -p gpu-short --time=00:02:00 --mem=2G --gres=gpu:h200:1 \
+# (b) Minimal canary on the SAME GPU type as the failed job (another type tests a
+#     different node pool). Success on a different node means the original node is bad.
+ssh <alias> 'srun -p gpu-short --time=00:02:00 --mem=2G --gres=gpu:<type>:1 \
     --account=<slurm-account> bash -lc "hostname; nvidia-smi -L; echo canary-ok"'
 
-# (c) Rule out SYSTEMIC causes so you don't mis-fix a node problem:
-ssh <alias> 'scontrol show reservations'      # free slots reserved for another partition?
-ssh <alias> 'scontrol show config | grep -i preempt'   # PreemptMode
-ssh <alias> 'sacctmgr show qos -P'            # QOS limits
-#  + confirm the --output dir is writable, and rule out any cron/watchdog killing jobs.
+# (c) Rule out SYSTEMIC causes before blaming a node:
+ssh <alias> 'sacct -j <jobid> -o JobID,State,ExitCode,Reason,NodeList -P'   # pending/fail reason
+ssh <alias> 'sacctmgr -n -P show qos format=Name,MaxSubmitPU,MaxJobsPU,MaxTRESPU'  # QOS limits
+ssh <alias> 'scontrol show reservations'      # maintenance reservations
+#  + confirm the --output dir is writable.
 ```
+
+On 2026-10-11 Explorer had `PreemptMode=OFF` and no reservations, so preemption is not a
+cause; re-check if that changes.
 
 **Fix:** exclude the bad node(s) and resubmit unchanged:
 ```
@@ -392,35 +439,32 @@ work** but ran out of clock during the final aggregation/write step. Defend agai
 this *before* it happens and recover cheaply *after*:
 - **Write per-item outputs as you go, idempotently (skip-existing).** Then the
   expensive GPU work is durable the moment each item lands.
-- **If you time out near the end, do NOT re-run on GPU.** Re-aggregate **CPU-only on the
-  login node** from the per-item files — the per-item results already exist, so the
-  final table costs seconds, not another H200-hour. (This is the same per-item /
-  idempotent pattern as the resumable-sweep note in §5.)
+- **If a job times out after its per-item outputs landed, do not re-run on GPU.**
+  Re-aggregate CPU-only from the per-item files inside
+  `srun -p short --time=00:20:00 --mem=16G ...`, never on the login node (§1: a ~200 MB
+  load can trigger the silent kill). (This is the same per-item / idempotent pattern as
+  the resumable-sweep note in §5.)
 
-**(b) "Idle" does not mean "available" on a short partition.** A `gpu-short`-style
-partition often shares physical nodes with the main `gpu` partition, and free slots can
-be **reserved for higher-priority partitions** — so even a tiny job **pends** or gets
-**launch-killed** (§9.3) despite the node looking idle. Before assuming availability,
-check:
-```bash
-ssh <alias> 'scontrol show reservations'
-ssh <alias> 'scontrol show config | grep -i preempt'   # PreemptMode
-```
+**(b) "Idle" does not mean "startable now".** `gpu`, `gpu-short` and `gpu-interactive`
+share the same nodes, and per-user QOS caps (§5) hold a job back even when GPUs are
+free. Choose the type with §5.1, which reads free GPUs per node and your caps.
 
 **(c) Size `--time` from the smoke, and don't undercut it.** Shorter walltime backfills
 faster and schedules sooner, but estimate the real runtime from the **per-item time
 measured in the G1 smoke** × item count, plus margin for load/aggregation. Undercutting
 that estimate just buys you a §9.4(a) timeout.
 
-**G5 classification:** a walltime-timeout of code that did its real work, and
-partition-contention pends/launch-kills, are **infrastructure** — they do **not** count
-toward the failure streak.
+**G5 classification:** a walltime-timeout of code that did its real work, and pending
+time, are **infrastructure** — they do **not** count toward the failure streak.
 
 ### 9.5 What counts as a G5 streak failure (L5 — reinforced)
-The failure modes in §9.1, §9.3, and §9.4 — **connection auth failures, node
-launch-kills, walltime-timeouts of working code, and partition contention** — are
-**infrastructure**, not agent-code bugs. They must **not** increment the G5
-consecutive-failure streak (`.failure_streak.json`). Record each explicitly with
+Infrastructure, not agent code (does not increment G5): connection/auth failures, node
+launch-kills, NODE_FAIL, a walltime timeout of code whose checkpoints were advancing, and
+pending time. **Counts as agent code:** an IdleBot cancellation of a job the agent
+designed with a long CPU-only phase inside a GPU allocation, because that is a
+job-design bug.
+
+They must **not** increment the G5 consecutive-failure streak (`.failure_streak.json`). Record each explicitly with
 `counted_in_streak: false`. Only a genuinely new bug in agent-written code (e.g. an OOM
 you introduced in preprocessing, a wrong wrapper, a logic error) increments the streak.
 When in doubt, ask: *"did my code have a bug, or did the cluster misbehave?"* See

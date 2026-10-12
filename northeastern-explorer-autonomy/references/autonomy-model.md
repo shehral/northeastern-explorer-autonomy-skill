@@ -48,15 +48,15 @@ allocations). Write these to a `USER_INPUT_TRACKER.md` OPEN list and wait.
 
 **G5's classification rule is load-bearing:** only **new agent-written-code bugs**
 increment the streak. **Infrastructure failures do NOT count** — HF API timeout, scp
-race, node OOM, a walltime-kill of code that was working, a **node launch-kill** (sbatch
-dies in seconds with a signal-style ExitCode and no log written — the node failed before
-your first line ran, fix: `--exclude` the bad node), a **walltime-timeout of working
-code** (the job finished its real work but the short partition cut it off before the
-final aggregation; recover by re-aggregating on the login node, no code change), and
-**partition contention** (a tiny job pends or gets launch-killed because free slots are
-reserved for a higher-priority partition — see `scontrol show reservations` /
-`PreemptMode`, not your code). When in doubt, ask: "did my code have a bug, or did the
-cluster misbehave?" Record the classification explicitly.
+race, node OOM, and: Infrastructure, not agent code (does not increment G5): connection/auth failures, node
+launch-kills, NODE_FAIL, a walltime timeout of code whose checkpoints were advancing, and
+pending time. **Counts as agent code:** an IdleBot cancellation of a job the agent
+designed with a long CPU-only phase inside a GPU allocation, because that is a
+job-design bug.
+A launch-kill is fixed with `--exclude` of the bad node; a timeout of working code is
+recovered by re-aggregating CPU-only in `srun -p short` (never on the login node). When
+in doubt, ask: "did my code have a bug, or did the cluster misbehave?" Record the
+classification explicitly.
 
 **Triage from evidence, not vibes.** First stop for any dead job:
 `sacct -j <id> --format=JobID,State,ExitCode,Elapsed,MaxRSS,ReqMem,NodeList`, then:
@@ -70,6 +70,9 @@ cluster misbehave?" Record the classification explicitly.
 | Login-node command produced **no output at all** | silent login-node SIGKILL (`cluster-setup.md` §1) — infrastructure | no |
 | Job "succeeded" but with-vs-without outputs are identical | silent no-op — agent code (wiring bug; see the end-to-end check) | yes |
 | `NODE_FAIL`, `CANCELLED` by admin, HF 5xx during pre-cache | infrastructure | no |
+| `FAILED` in 1-5 s, `.batch` `CANCELLED`, signal ExitCode, no log | node launch-kill (`cluster-setup.md` §9.3) — infrastructure | no |
+| `CANCELLED` by IdleBot (email; `gpu-logs <id>`) | CPU phase inside a GPU job — agent design | yes |
+| `FAILED` at the first CUDA op with `no kernel image is available` | env lacks this GPU's arch — route to a supported type (`cluster-setup.md` §5.1); agent code | yes |
 
 ## Supporting safety rules (the load-bearing few)
 
@@ -81,9 +84,10 @@ cluster misbehave?" Record the classification explicitly.
   generate one token with the module active and assert the metric (e.g. an EOS-logit
   delta) is **nonzero**. Catches the "hook registered but never invoked" bug that makes
   a no-op look like a real null result. A 4.5h H200 bake-off was lost to exactly this.
-- **Clean-output-dir-on-resubmit rule.** Skip-existing logic silently inherits
-  bug-mode data from the prior run; the aggregator then computes from stale bad output
-  and your fix never shows up. Always write the resubmit to a fresh `*_clean/` dir.
+- **Output dir on resubmit: resume vs fix.** Same code, resuming after a TIMEOUT or a
+  node failure: same dir, skip-existing. Resubmitting after a code fix: a fresh
+  `*_clean/` dir, because skip-existing would silently keep the bug-mode outputs and
+  the aggregator would compute from them, so your fix never shows up.
 
 ## Ledger files (transparent, append-only state)
 

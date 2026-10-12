@@ -4,18 +4,21 @@
 # Fill in the <ANGLE-BRACKET> placeholders and the Customization Points marked
 # CUSTOMIZE. Encodes: pinned modules, PATH-export env activation, mandatory
 # offline mode, cache paths on the persistent allocation, cuBLAS determinism,
-# a pre-flight model-cache gate, and a SIGTERM save-hook for walltime kills.
+# a pre-flight model-cache gate, and an early-signal checkpoint hook.
+# Submit lists via the environment (IDX=1,2,3 sbatch ...), not --export=ALL,IDX=1,2,3:
+# --export splits on commas.
 # See references/cluster-setup.md for the reasoning behind every line.
 # ============================================================================
-#SBATCH --job-name=<jobname>
+#SBATCH --job-name=<jobname>              # or set at submit time: sbatch --job-name=...
 #SBATCH --partition=gpu                  # 8h cap; use gpu-short (<=2h) for smoke/pre-flight
 #SBATCH --account=<slurm-account>                 # CUSTOMIZE: SLURM_ACCOUNT
 #SBATCH --gres=gpu:<type>:1               # CUSTOMIZE per cluster-setup.md s5.1 (h200 | a100 | v100-sxm2 | v100-pcie | t4)
 #SBATCH --nodes=1 --ntasks=1 --cpus-per-task=8
 #SBATCH --mem=48G                        # pad for logit/activation buffers
 #SBATCH --time=02:00:00                  # <= partition cap; include ~30% margin
-#SBATCH --output=/projects/<group>/<user>/<proj>/logs/<jobname>-%j.out   # CUSTOMIZE: ALLOC
-#SBATCH --error=/projects/<group>/<user>/<proj>/logs/<jobname>-%j.err
+#SBATCH --output=/projects/<group>/<user>/<proj>/logs/%x-%j.out   # CUSTOMIZE: ALLOC (#SBATCH lines are not
+#SBATCH --error=/projects/<group>/<user>/<proj>/logs/%x-%j.err    #  shell-expanded; %x = job name, %j = job id)
+#SBATCH --signal=B:USR1@600              # USR1 to the batch shell 10 min before the time limit
 #SBATCH --export=ALL
 
 set -e
@@ -72,18 +75,21 @@ SNAP="$MODEL_DIR_GLOB/snapshots/<revision>"                 # CUSTOMIZE: REVISIO
   exit 2
 }
 
-# --- SIGTERM save-hook: checkpoint before a walltime kill (persistent-job rule) ----
-POST_SAVE_HOOK="${POST_SAVE_HOOK:-}"
-_on_term() {
-  echo "=== SIGTERM at $(date) — running POST_SAVE_HOOK if set ==="
-  [ -n "$POST_SAVE_HOOK" ] && bash -c "$POST_SAVE_HOOK" || echo "(no/failed save hook — non-fatal)"
-  exit 1
-}
-trap _on_term SIGTERM SIGINT
-
-# --- The work ---------------------------------------------------------------
+# --- The work, with an early checkpoint signal --------------------------------
+# Per-item atomic checkpoints are the primary defence against the time limit. At the
+# limit Slurm SIGTERMs python too, so a SIGTERM trap here would run after python's
+# state is gone. Instead: run python in the background and forward the early USR1
+# (from --signal above); the script must checkpoint on SIGUSR1. bash defers traps
+# while a foreground child runs, hence & + wait. The RC/TRC bookkeeping keeps
+# `set -e` from aborting when the trap interrupts `wait`, and preserves python's exit code.
 cd "$PROJ"
 echo "=== running main script ==="
-$PYTHON code/<script>.py --arg value     # CUSTOMIZE
+$PYTHON code/<script>.py --arg value &   # CUSTOMIZE
+PY=$!
+RC=0; SIG=0; TRC=0
+trap 'echo "=== USR1 at $(date): forwarding checkpoint signal ==="; SIG=1; kill -USR1 $PY; wait $PY && TRC=0 || TRC=$?' USR1
+wait $PY || RC=$?
+if [ "$SIG" = 1 ]; then RC=$TRC; fi
+[ "$RC" = 0 ] || { echo "=== python exited $RC ==="; exit "$RC"; }
 
 echo "=== <jobname> done: $(date) ==="
