@@ -2,7 +2,7 @@
 
 Autonomy is only safe if the **submit** action is hard to get wrong. This layer makes
 the verified path the only path: a hook intercepts the `sbatch` *before* it lands and
-runs a per-job verifier that refuses to let a broken experiment burn H200-hours.
+runs a per-job verifier that refuses to let a broken experiment burn GPU-hours.
 
 Two complementary mechanisms:
 1. **PreToolUse hooks** — intercept a tool call before it executes; block on failure.

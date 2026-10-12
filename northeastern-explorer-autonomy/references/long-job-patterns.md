@@ -56,9 +56,11 @@ gb = torch.cuda.get_device_properties(0).total_memory / 1e9
 DIM_BATCH = 32 if gb >= 100 else 12 if gb >= 70 else 4   # H200 / A100-80 / smaller
 ```
 
-The same sbatch then runs correctly on whatever partition has capacity, which
-is exactly what an autonomous scheduler needs — partition choice becomes a
-queue-time decision, not a code change.
+Pick the dtype from the device the same way
+(`torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32`). The
+same sbatch then runs correctly on whatever GPU type has capacity, which is
+exactly what an autonomous scheduler needs — type choice becomes a queue-time
+decision (`cluster-setup.md` §5.1), not a code change.
 
 ## 5. Saturation check before spending the full budget
 

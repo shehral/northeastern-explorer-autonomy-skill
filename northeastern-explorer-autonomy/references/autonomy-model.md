@@ -43,7 +43,7 @@ allocations). Write these to a `USER_INPUT_TRACKER.md` OPEN list and wait.
 | **G1** | Smoke-test gate | New code runs a 60s single-input test (local or `gpu-short`) and passes — or the script is byte-identical to a prior success. | ~5000:1 cost asymmetry vs an H200-hour. Catches wrong wrapper, OOM, offline-mode failure, wiring bugs for free. |
 | **G2** | Pre-registration | Falsification/pass criteria written **before** the run, in the claim record or a `*_preregistration.md`. | Kills post-hoc threshold tuning and p-hacking. |
 | **G3** | Info-gain | The experiment meaningfully discriminates between currently-uncertain hypotheses (score ≥ 0.3 *(tune)* if you rank them). | Prevents spending budget on runs that don't move the needle. |
-| **G4** | Daily budget | Under `DAILY_GPU_BUDGET` H200-h today; checked against `.compute_budget.json`. | Stops one decision from eating the cluster (6×8h = 48h in a tick). Forces pacing. |
+| **G4** | Daily budget | Under `DAILY_GPU_BUDGET` GPU-h today (all types; per-type caps optional); checked against `.compute_budget.json`. | Stops one decision from eating the cluster (6×8h = 48h in a tick). Forces pacing. |
 | **G5** | Failure-streak rollback | Not under auto-rollback: `< FAIL_STREAK_MAX` consecutive **agent-code** failures, per `.failure_streak.json`. | Bug-loops (broken code → fail → broken fix → fail) are the priciest failure mode. |
 
 **G5's classification rule is load-bearing:** only **new agent-written-code bugs**
@@ -87,25 +87,32 @@ cluster misbehave?" Record the classification explicitly.
 
 ## Ledger files (transparent, append-only state)
 
-### `.compute_budget.json` — G4 daily H200-hour tracker
+### `.compute_budget.json` — G4 daily GPU-hour tracker (by type)
 ```json
 {
-  "soft_cap_h200_hours_per_day": 24.0,
+  "soft_cap_gpu_hours_per_day": 24.0,
+  "soft_cap_by_type": {"h200": 24.0},                 // optional per-type caps
   "by_day": {
     "2026-01-01": {                                   // example day — your own dates
-      "h200_hours_used": 3.0,
+      "gpu_hours_used": 3.5,
+      "gpu_hours_by_type": {"h200": 3.0, "t4": 0.5},
       "jobs": [
-        {"slurm_id": "1000001", "name": "example-job",
-         "elapsed_hours": 3.0, "state": "COMPLETED",
-         "submitted_at": "2026-01-01T12:44:00-08:00"}
+        {"slurm_id": "1000001", "name": "example-job", "gpu_type": "h200",
+         "n_gpus": 1, "elapsed_hours": 3.0, "gpu_hours": 3.0, "state": "COMPLETED",
+         "submitted_at": "2026-01-01T12:44:00-08:00"},
+        {"slurm_id": "1000002", "name": "example-sweep-shard", "gpu_type": "t4",
+         "n_gpus": 1, "elapsed_hours": 0.5, "gpu_hours": 0.5, "state": "COMPLETED",
+         "submitted_at": "2026-01-01T13:05:00-08:00"}
       ]
     }
   },
   "_last_updated": "2026-01-01T20:16:00-08:00",
-  "_format_version": 1
+  "_format_version": 2
 }
 ```
-- `h200_hours_used` is recomputed as the sum of the day's job `elapsed_hours`.
+- `gpu_hours` = `elapsed_hours` × `n_gpus`; `gpu_hours_used` and `gpu_hours_by_type` are
+  recomputed from the day's jobs. Record the type of every job so a cheap T4 job is
+  neither billed as an H200 hour nor left unaccounted.
 - Keyed by local date; **resets at local midnight.** Pick ONE timezone and use it
   consistently (this example uses `-08:00`), because it drives the reset boundary.
 - The decision loop reads "remaining today" before any T1 submit. Negative → pause T1.

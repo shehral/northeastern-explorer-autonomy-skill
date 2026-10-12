@@ -28,9 +28,12 @@ the *shape* is what's portable):
 4. **Integrate landed jobs.** For each terminal job: read its result, update your claim/
    experiment records, and **record the outcome in the failure-streak ledger**
    (agent-code bug vs infrastructure — see `autonomy-model.md`).
-5. **Update budget.** Add the job's `elapsed_hours` to today's `.compute_budget.json`.
+5. **Update budget.** Add the job's GPU-hours (`elapsed_hours` × GPUs) under its GPU
+   type to today's `.compute_budget.json`.
 6. **Decide & maybe submit.** Pick the top candidate experiment; run the **five
-   guardrails** (G1–G5). If all pass and it's within the T1 walltime cap, submit and
+   guardrails** (G1–G5). If all pass and it's within the T1 walltime cap, choose its GPU
+   type (`cluster-setup.md` §5.1; also move any of your own jobs that have pended
+   ~15 min while a fitting type sits free), submit, and
    **arm a persistent Monitor** (next section). Otherwise, surface it as a
    recommendation (T2) rather than firing.
 7. **Log.** Append every auto-submit to an append-only `OVERNIGHT_AUTONOMOUS_FIRES.md`

@@ -164,11 +164,26 @@ else.
 ## 5. Partitions, GPUs, walltime, queue hygiene
 
 - **`gpu`** — 8h hard walltime cap. **`gpu-short`** — ≤2h, good for smoke/pre-flight.
-- Request the H200 explicitly: `--gres=gpu:h200:1`. Bill to `--account=<slurm-account>`.
-- **Concurrent-job limit varies by QOS/account** — ~4 running GPU jobs on some,
-  a hard `QOSMaxSubmitJobPerUserLimit=2` on others. Don't assume: check with
-  `sacctmgr show assoc user=$USER format=account,qos` and observe; stage
-  submissions instead of bulk-submitting into a rejection.
+- Choose the GPU type per job (§5.1); never hard-code one. Bill to
+  `--account=<slurm-account>`.
+- **Per-user QOS caps apply across all GPU types.** Verified 2026-10-11
+  (MaxSubmitPU | MaxJobsPU | MaxTRESPU): `gpu` 8 | 4 | 4 GPUs, `gpu-short` 8 | 2 | 2 GPUs,
+  `courses-gpu` none | 2 | 2 GPUs, `multigpu` 8 | 4 | 8 GPUs, `gpu-interactive` 4 | 2.
+  A job over the running cap pends with `QOSMaxJobsPerUserLimit`. Re-check yours, since
+  your account may map to a different QOS:
+  `sacctmgr -n -P show assoc user=$USER format=account,partition,qos` and
+  `sacctmgr -n -P show qos format=Name,MaxSubmitPU,MaxJobsPU,MaxTRESPU`. Every job under
+  your user counts, including ones from your other projects, so count with
+  `squeue -u $USER` before planning concurrency. Array tasks count individually toward
+  MaxSubmitPU; `sacct -X` collapses a pending array into one row, so count queued tasks
+  with `squeue -u $USER -h -r -o %i`. Stage submissions instead of bulk-submitting into
+  a rejection.
+- **IdleBot cancels GPU jobs that sit under-utilised for an hour.** An email arrives at
+  about 15 min, and `gpu-logs <jobid>` shows the record. CPU-heavy phases (statistics,
+  probe fits, aggregation, data prep) go to `-p short`, never inside a GPU allocation.
+  Log GPU utilisation every few minutes (`nvidia-smi --query-gpu=utilization.gpu,memory.used
+  --format=csv -l 60 > gpu_$SLURM_JOB_ID.csv &`), and check in the smoke that the GPU is
+  busy once loading ends.
 - **Job needs more than the 8h cap?** Don't fight the partition — design the job
   resumable (atomic per-item checkpoints, exit-0-if-done; `long-job-patterns.md` §2)
   and **chain it**: resubmit the same sbatch and it continues from checkpoints.
@@ -179,12 +194,54 @@ else.
 - `cmd | head` under `set -o pipefail` can SIGPIPE-kill the job — use
   `cmd 2>&1 | head -n N || true`.
 
+### 5.1 Choosing a GPU type (and spreading jobs across types)
+
+Explorer's GPU partitions (`gpu` 8 h, `gpu-short` 2 h, `gpu-interactive`) share the
+same nodes, so "idle in `sinfo`" is not "startable now". Types: `h200` (141 GB), `a100`
+(40 GB; 80 GB on nodes with feature `a100@80g`, select with `--constraint=a100@80g`),
+`v100-sxm2` / `v100-pcie` (16 or 32 GB; confirm with `nvidia-smi` in the smoke), `t4`
+(16 GB). T4 and V100 have **no bf16**: run fp32, or fp16 with an overflow check. Before
+every GPU submission:
+
+1. **Need.** Take peak GPU memory from the smoke's `torch.cuda.max_memory_allocated()`
+   and the runtime per item. Do not trust a hand estimate: logits, log-softmax and a
+   previous batch's tensors still alive during the next forward can double it (one
+   field run estimated ~5 GB and peaked at 12 GB). Keep at least 20% headroom.
+2. **Types your env can run.** `$PYTHON -c "import torch; print(torch.cuda.get_arch_list())"`.
+   sm_70 = V100, sm_75 = T4, sm_80 = A100, sm_90 = H200. Recent torch wheels have
+   dropped sm_70 (cu130 builds, and also a torch 2.11 cu128 build in the field), so a
+   V100 then fails at the first CUDA op with `no kernel image is available`. Check the
+   arch list, not the CUDA version.
+3. **Live availability.** Free GPUs per node, the best predictor of a fast start:
+   `sinfo -p gpu-short -N -h -O NodeHost,Gres,GresUsed,StateLong` (use `-p gpu` for long
+   jobs). Pending demand per type: `squeue -p gpu,gpu-short -h -t PD -o '%b' | sort | uniq -c`.
+   Down or drained nodes and requests for types that no longer exist inflate the totals.
+4. **Your caps** (§5). They apply across all types, so splitting does not raise them.
+5. **Start estimates are a weak hint.** `sbatch --test-only --gres=gpu:<type>:1 ...` gives
+   backfill estimates. In one field run they said 28 min for a type with an idle node
+   that then started in 28 s, and `squeue --start` returned N/A. Use them to break ties,
+   not to decide.
+6. **Submit to the type that fits and frees up soonest.** For short jobs, prefer an idle
+   smaller GPU over a queued faster one; a small job on a big GPU also risks IdleBot
+   under-utilisation. Never use bare `--gres=gpu:1` unless the code picks its dtype from
+   the device (`torch.cuda.is_bf16_supported()`) and the arch list covers every type.
+7. **Spread embarrassingly parallel sweeps.** Split items across several single-GPU jobs
+   on different free types, within the QOS caps, with interleaved shards
+   (`long-job-patterns.md` §1) and per-item idempotent outputs. Overlapping one item
+   across two types gives a cheap cross-hardware check; do not assume bit-identical
+   results in general (TF32 or different kernels change them).
+8. **Rebalance your own pending jobs.** If a job still pends after ~15 min while another
+   fitting type shows free GPUs, `scancel` that pending job (your own only) and resubmit
+   it on the free type. Pending time is infrastructure, not a G5 failure.
+9. **Record** the chosen type, the alternatives and what you saw for them in the job's
+   ledger entry, and log its GPU-hours under that type (G4).
+
 ## 6. Canonical sbatch anatomy
 
 Use `assets/job_template.sbatch` — it encodes everything above. Its skeleton:
 
 ```
-#SBATCH header   → job-name, --partition=gpu, --account, --gres=gpu:h200:1,
+#SBATCH header   → job-name, --partition=gpu, --account, --gres=gpu:<type>:1 (§5.1),
                    --time (≤ partition cap + margin), --mem, --output/--error to
                    $ALLOC/.../logs/<job>-%j.{out,err}, --export=ALL
 set -e -o pipefail
@@ -199,7 +256,8 @@ the work         → $PYTHON code/<script>.py --args ...
 
 ## 7. Loader gotchas
 
-- **bf16 only.** Never int4/int8; never quantize the KV cache. `do_sample=False`
+- **bf16 on A100/H200; on T4/V100 use fp32 (or fp16 with an overflow check).** Never
+  int4/int8 for diagnostics; never quantize the KV cache. `do_sample=False`
   (greedy) for diagnostics; pin and log every seed.
 - **Attention impl:** `attn_implementation="eager"` when extracting attention or
   hooking internals; `"sdpa"` for routine generation.

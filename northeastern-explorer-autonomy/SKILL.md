@@ -1,22 +1,24 @@
 ---
 name: northeastern-explorer-autonomy
 description: >-
-  Operate the Northeastern Explorer HPC cluster (SLURM + H200 GPUs) autonomously
-  from a Claude Code session — connect, set up the pinned conda/CUDA environment,
-  submit smoke-tested SLURM jobs through a safety-verified hook layer, and run a
+  Operate the Northeastern Explorer HPC cluster (SLURM; H200, A100, V100 and T4 GPUs)
+  autonomously from a Claude Code session — connect, set up the pinned environment,
+  pick the GPU type each job fits and can start on soonest, submit smoke-tested SLURM
+  jobs through a safety-verified hook layer, and run a
   self-sustaining heartbeat loop with compute-budget and failure-streak guardrails
   so experiments run hands-off overnight. Use this whenever the user wants to run,
   submit, monitor, or schedule jobs on Explorer (login.explorer.northeastern.edu),
-  set up autonomous or overnight HPC runs, configure a research heartbeat / cron /
+  set up autonomous or overnight HPC runs, spread jobs across GPU types to avoid long
+  queues, configure a research heartbeat / cron /
   loop on a cluster, recover a stalled autonomous session, or onboard a collaborator
   to autonomous cluster operation. Trigger even when the user just says "submit this
   to the cluster", "kick off an overnight run", "watch this SLURM job", "set up my
   Explorer environment", or "let Claude run experiments on its own" — the guardrails
   and connection mechanics in here prevent the expensive footguns (silent meta-init
-  model collapse, runaway H200 spend, bug-loops) that ad-hoc cluster use hits.
+  model collapse, runaway GPU spend, bug-loops) that ad-hoc cluster use hits.
 metadata:
   version: 1.2.0
-  tags: [hpc, slurm, explorer, northeastern, autonomy, h200, heartbeat, guardrails]
+  tags: [hpc, slurm, explorer, northeastern, autonomy, gpu-selection, heartbeat, guardrails]
 ---
 
 # Operating Northeastern Explorer Autonomously with Claude Code
@@ -72,7 +74,7 @@ account's values before first use** — the rest of the skill and the bundled
 | `HF_CACHE` | `$ALLOC/hf_cache` | model cache (pre-populated by a CPU pre-cache job, never on the login node) |
 | `PROXY` | `<squid-proxy-ip>:3128` | the cluster's squid proxy (from the research-computing docs); exported **only** inside CPU pre-cache jobs |
 | `MODEL_ID` / `REVISION` | `<org>/<model>` @ `<revision>` | your pinned model + commit (if you use a model hub) |
-| `DAILY_GPU_BUDGET` | `24` H200-hours | G4 soft cap per day (tune) |
+| `DAILY_GPU_BUDGET` | `24` GPU-hours | G4 soft cap per day, all types; the ledger records hours per GPU type (tune; add per-type caps if you need them) |
 | `FAIL_STREAK_MAX` | `3` | G5 consecutive-agent-bug auto-rollback threshold (tune) |
 
 If you are a **new user adapting this**, also rewrite any model-specific loader fix.
@@ -106,7 +108,11 @@ guardrails are portable; only the connection/env/partition details change.
    appear under `sbatch`. For anything expected to run more than a few GPU-hours, shape
    it with `references/long-job-patterns.md` first — interleaved shards, resumable
    checkpoints, and a saturation check routinely halve real spend.
-4. **Compose the sbatch from `assets/job_template.sbatch`** — it already encodes the
+4. **Choose the GPU type, then compose the sbatch.** Never hard-code one type: pick the
+   one that fits the smoke's measured memory, that your env's torch build supports, and
+   that can start soonest given free GPUs and your QOS caps
+   (`references/cluster-setup.md` §5.1). Sweeps can split across several free types.
+   Compose from `assets/job_template.sbatch` — it already encodes the
    pinned modules, the PATH-export env activation, mandatory offline flags, cache
    paths, determinism, a pre-flight model-cache check, and a SIGTERM save-hook.
 5. **Verify, then submit.** A PreToolUse hook should run a per-job verifier before the
@@ -188,7 +194,7 @@ The **five guardrails** that gate T1:
 | **G1** | Smoke-test gate | 60s single-input run passed **via at least one real `sbatch`** (not only `srun` — `srun` writes no output file and skips launch/prolog failures), or script unchanged from a prior success |
 | **G2** | Pre-registration | falsification criteria written **before** the run |
 | **G3** | Info-gain | experiment discriminates between live hypotheses (≥ 0.3 if you score it) |
-| **G4** | Daily compute budget | under `DAILY_GPU_BUDGET` H200-h today (`.compute_budget.json`) |
+| **G4** | Daily compute budget | under `DAILY_GPU_BUDGET` GPU-h today, recorded per GPU type (`.compute_budget.json`) |
 | **G5** | Failure-streak rollback | not under auto-rollback (`< FAIL_STREAK_MAX` consecutive **agent-code** bugs) |
 
 G5's subtlety: **infrastructure failures don't count** (HF timeout, scp race, a
@@ -208,7 +214,7 @@ Autonomy is only safe if the *submit* action is hard to get wrong. Wire two thin
 
 1. **PreToolUse hooks** that intercept `sbatch`/`Edit`/`commit` and run a check
    *before* the call lands — blocking on failure so you see it inline.
-2. **Per-job verifiers** (`verify_<job>.sh`) that enforce, before any H200 burns:
+2. **Per-job verifiers** (`verify_<job>.sh`) that enforce, before any GPU-hour burns:
    the script + sbatch exist, `--smoke` ran clean, offline flags are set,
    pre-registration constant present, and — critically (the end-to-end wiring check) —
    that a with-intervention run produces **different output** than without. A registered

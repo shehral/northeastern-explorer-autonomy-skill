@@ -10,7 +10,7 @@
 #SBATCH --job-name=<jobname>
 #SBATCH --partition=gpu                  # 8h cap; use gpu-short (<=2h) for smoke/pre-flight
 #SBATCH --account=<slurm-account>                 # CUSTOMIZE: SLURM_ACCOUNT
-#SBATCH --gres=gpu:h200:1
+#SBATCH --gres=gpu:<type>:1               # CUSTOMIZE per cluster-setup.md s5.1 (h200 | a100 | v100-sxm2 | v100-pcie | t4)
 #SBATCH --nodes=1 --ntasks=1 --cpus-per-task=8
 #SBATCH --mem=48G                        # pad for logit/activation buffers
 #SBATCH --time=02:00:00                  # <= partition cap; include ~30% margin

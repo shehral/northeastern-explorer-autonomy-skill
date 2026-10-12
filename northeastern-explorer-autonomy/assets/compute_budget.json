@@ -1,14 +1,19 @@
 {
-  "_doc": "G4 daily H200-hour budget ledger. Keyed by local date (pick ONE timezone; it defines the midnight reset boundary). h200_hours_used is the sum of the day's job elapsed_hours. The decision loop reads remaining-today before any T1 submit; pause T1 when it goes negative. Write atomically (tmp + rename), stdlib-only.",
-  "soft_cap_h200_hours_per_day": 24.0,
+  "_doc": "G4 daily GPU-hour budget ledger, recorded per GPU type. Keyed by local date (pick ONE timezone; it defines the midnight reset boundary). gpu_hours = elapsed_hours x n_gpus; gpu_hours_used and gpu_hours_by_type are the sums over the day's jobs. soft_cap_gpu_hours_per_day covers all types; soft_cap_by_type is optional. The decision loop reads remaining-today before any T1 submit; pause T1 when it goes negative. Write atomically (tmp + rename), stdlib-only.",
+  "soft_cap_gpu_hours_per_day": 24.0,
+  "soft_cap_by_type": {},
   "by_day": {
     "2026-01-01": {
-      "h200_hours_used": 0.0,
+      "gpu_hours_used": 0.0,
+      "gpu_hours_by_type": {},
       "jobs": [
         {
           "slurm_id": "0000000",
           "name": "example-job",
+          "gpu_type": "t4",
+          "n_gpus": 1,
           "elapsed_hours": 0.0,
+          "gpu_hours": 0.0,
           "state": "COMPLETED",
           "submitted_at": "2026-01-01T00:00:00-08:00"
         }
@@ -16,5 +21,5 @@
     }
   },
   "_last_updated": "2026-01-01T00:00:00-08:00",
-  "_format_version": 1
+  "_format_version": 2
 }
