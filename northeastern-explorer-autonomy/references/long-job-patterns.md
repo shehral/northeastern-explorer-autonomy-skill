@@ -19,7 +19,7 @@ blocks. Two payoffs:
 - **A lost shard costs coverage, not a whole document class.** A chunked shard
   that dies takes all of one corpus region with it.
 
-Merge by averaging (or the estimator's natural combine), then **certify the
+Merge by averaging (or the estimator's natural combine), then **check the
 merge**: compare merged-vs-single-shard outputs on a held-out probe set and
 record the agreement. If merged ≈ shard, the merge is sound and you have the
 receipt.

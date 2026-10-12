@@ -253,7 +253,7 @@ integrated promptly without polling, and the loop survives even if one mechanism
 - `references/safety-hooks.md` — PreToolUse hook wiring and the per-job verifier
   pattern (with the reusable `_lib.sh` helper set).
 - `references/long-job-patterns.md` — field-tested patterns for multi-day GPU
-  campaigns: interleaved sharding with certified
+  campaigns: interleaved sharding with checked
   merges, resumable/idempotent shard jobs, budget estimation from a smoke shard,
   memory-adaptive batching, saturation-before-spending, artifact stamping,
   fp16-store/fp32-load, and the generalized loader trust check. **Read before
