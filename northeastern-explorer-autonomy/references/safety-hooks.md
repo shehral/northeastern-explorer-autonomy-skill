@@ -67,8 +67,8 @@ Synthesized across real verifiers — adapt the domain-specific ones:
 
 1. **Existence** — the referenced Python script and sbatch file both exist.
 2. **Static structure** — required flags present (`--smoke`), required pre-registration
-   constant present (G2), required env in the sbatch (`HF_HUB_OFFLINE=1` — the offline
-   rule, see `cluster-setup.md` §4).
+   constant present (G2), required env in the sbatch (`HF_HUB_OFFLINE=1` and the inherited
+   proxy unset — the offline rule, see `cluster-setup.md` §4).
 3. **Smoke integrity** — `--smoke` runs without crashing, and produces a *discriminating*
    signal (e.g. a trained direction's norm > 0, an AUC that differs from a shuffled
    baseline). A smoke test that passes trivially isn't a gate.

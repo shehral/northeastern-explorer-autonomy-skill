@@ -50,6 +50,10 @@ mkdir -p "$HF_HOME" "$TORCH_HOME"
 # --- Offline mode (MANDATORY on every GPU job; see cluster-setup.md s4) -----
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1
+# Jobs inherit the login shell's proxy (--export=ALL). GPU jobs stay offline, and localhost servers must bypass it.
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+export no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1
 
 # --- Deterministic cuBLAS ---------------------------------------------------
 export CUBLAS_WORKSPACE_CONFIG=:4096:8

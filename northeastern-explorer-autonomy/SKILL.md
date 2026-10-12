@@ -72,7 +72,7 @@ account's values before first use** — the rest of the skill and the bundled
 | `CONDA_ENV` | `$ALLOC/conda_envs/<conda-env>` | your pinned conda env path |
 | `MODULES` | `miniconda3/24.11.1` | pinned module versions (Explorer-wide). No `cuda/*` module for pip-installed torch: the wheel carries its own CUDA runtime (`references/cluster-setup.md` §3) |
 | `HF_CACHE` | `$ALLOC/hf_cache` | model cache (pre-populated by a CPU pre-cache job, never on the login node) |
-| `PROXY` | `<squid-proxy-ip>:3128` | the cluster's squid proxy (from the research-computing docs); exported **only** inside CPU pre-cache jobs |
+| `PROXY` | `<squid-proxy-ip>:3128` | the cluster's squid proxy (from the research-computing docs). Jobs inherit it from the login shell: export it explicitly in CPU pre-cache jobs, **unset** it in GPU jobs |
 | `MODEL_ID` / `REVISION` | `<org>/<model>` @ `<revision>` | your pinned model + commit (if you use a model hub) |
 | `DAILY_GPU_BUDGET` | `24` GPU-hours | G4 soft cap per day, all types; the ledger records hours per GPU type (tune; add per-type caps if you need them) |
 | `FAIL_STREAK_MAX` | `3` | G5 consecutive-agent-bug auto-rollback threshold (tune) |
@@ -130,14 +130,15 @@ guardrails are portable; only the connection/env/partition details change.
 
 ## The one rule that prevents the most expensive failure
 
-**GPU jobs run offline.** Compute nodes reach the internet **only** when a job exports
-the squid proxy itself (`PROXY`; do not rely on inheritance), and you use the proxy
-**only in CPU pre-cache jobs**. Every GPU job runs offline, so a missing file fails
-loudly at load time instead of the job hanging, retrying, or silently resolving a
-different revision mid-run:
+**GPU jobs run offline.** Compute nodes reach the internet only through the squid
+proxy (`PROXY`), and jobs inherit it from the login shell by default. Export it
+explicitly only in CPU pre-cache jobs; **unset it in every GPU job** and set the
+offline flags, so a missing file fails loudly at load time instead of the job hanging,
+retrying, or silently resolving a different revision mid-run:
 
 ```bash
-export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1     # in the sbatch
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1   # in the sbatch
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY; export no_proxy=localhost,127.0.0.1
 ```
 ```python
 AutoModel...from_pretrained(MODEL_ID, revision=REV, local_files_only=True)  # in Python

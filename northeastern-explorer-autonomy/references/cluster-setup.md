@@ -9,7 +9,7 @@ anatomy, and loader gotchas. Replace the `Customization Points` values from `SKI
 1. Connection (SSH, ControlMaster, Duo, login-node limits)
 2. Allocation & storage (where files go, pre-caching)
 3. Environment activation (modules, conda, the PATH-export pattern)
-4. The offline rule (GPU jobs offline; the proxy only in CPU pre-cache jobs)
+4. The offline rule (jobs inherit the proxy: export it in CPU pre-cache jobs, unset it in GPU jobs)
 5. Partitions, GPUs, walltime, queue hygiene
 6. Canonical sbatch anatomy
 7. Loader gotchas (bf16, attn impl, the `lm_head` tie fix)
@@ -138,13 +138,21 @@ export CUBLAS_WORKSPACE_CONFIG=:4096:8              # deterministic cuBLAS
 
 ## 4. The offline rule (the single most expensive footgun)
 
-Compute nodes reach the internet **only** when the job exports the squid proxy itself
-(`export http_proxy=http://<squid-proxy-ip>:3128 https_proxy=... HTTP_PROXY=...
-HTTPS_PROXY=... no_proxy=localhost,127.0.0.1`). Do not rely on inheritance. Use the
-proxy **only in CPU pre-cache jobs**. GPU jobs run **offline**
-(`HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1`, `local_files_only=True`), so a missing file
-fails loudly at load time instead of the job hanging, retrying, or silently resolving a
-different revision.
+Compute nodes have no direct internet; they reach it only through the squid proxy
+(`PROXY`). Jobs **inherit** the proxy from the login shell, because the login node sets
+it and `sbatch`/`srun` default to `--export=ALL` (verified 2026-10-12: a `short` job
+reached the hub with the inherited variables and failed with them unset). So:
+
+- **CPU pre-cache jobs:** export it explicitly:
+  `export http_proxy=http://<squid-proxy-ip>:3128 https_proxy=... HTTP_PROXY=... HTTPS_PROXY=... no_proxy=localhost,127.0.0.1`.
+  Do not rely on inheritance there.
+- **Every GPU job:** unset it:
+  `unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY; export no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1`.
+  Also set the offline flags (`HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+  HF_DATASETS_OFFLINE=1`, `local_files_only=True`), so a missing file fails loudly at
+  load time instead of the job hanging, retrying, or silently resolving a different
+  revision. Unsetting it also keeps localhost servers (for example an inference
+  engine) from being routed through the proxy.
 
 Offline mode does not protect against a checkpoint whose weights are missing or
 mis-tied: that loads "successfully" with freshly initialized tensors and generates
@@ -155,7 +163,9 @@ Set all of these on every GPU job (the offline-mode rule):
 
 ```bash
 # in the sbatch:
-export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY        # inherited from the login shell
+export no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1
 ```
 ```python
 # in Python, before/at load:
@@ -167,8 +177,8 @@ proc  = AutoProcessor.from_pretrained(MODEL_ID, revision=REVISION, local_files_o
 ```
 
 `<squid-proxy-ip>` is the `PROXY` Customization Point (from the cluster's
-research-computing docs). Export it explicitly in the pre-cache script, and nowhere
-else.
+research-computing docs). Export it explicitly in the pre-cache script, and unset it in
+every GPU job.
 
 ## 5. Partitions, GPUs, walltime, queue hygiene
 
@@ -255,7 +265,7 @@ Use `assets/job_template.sbatch` — it encodes everything above. Its skeleton:
                    $ALLOC/.../logs/<job>-%j.{out,err}, --export=ALL
 set -e -o pipefail
 modules + conda  → module load $MODULES; PATH-export; $PYTHON
-cache + offline  → HF_HOME/TORCH_HOME; HF_HUB_OFFLINE=1; TRANSFORMERS_OFFLINE=1
+cache + offline  → HF_HOME/TORCH_HOME; HF_HUB/TRANSFORMERS/HF_DATASETS_OFFLINE=1; unset the inherited proxy
 determinism      → CUBLAS_WORKSPACE_CONFIG
 sanity           → nvidia-smi | head; torch.cuda.is_available() assert
 pre-flight gate  → assert the model snapshot exists in HF_CACHE (else exit 2)  [G1 in spirit]
