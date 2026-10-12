@@ -293,7 +293,7 @@ every GPU submission:
    `sinfo -p gpu-short -N -h -O NodeHost,Gres,GresUsed,StateLong` (use `-p gpu` for long
    jobs). Pending demand per type: `squeue -p gpu,gpu-short -h -t PD -o '%b' | sort | uniq -c`.
    Down or drained nodes and requests for types that no longer exist inflate the totals.
-   Node RAM can block a free GPU: GPU nodes share their RAM across 3-8 GPUs, and a node
+   Node RAM can block a free GPU: GPU nodes share their RAM across 2-8 GPUs, and a node
    with a free GPU may have almost no unallocated memory. Compare `Memory − AllocMem`
    from `sinfo -p <p> -N -h -O NodeHost,Gres,GresUsed,Memory,AllocMem` (MB) with your
    `--mem` (`FreeMem` is the OS's free RAM and does not drive scheduling). Request the
@@ -317,7 +317,8 @@ every GPU submission:
    results in general (TF32 or different kernels change them).
 8. **Rebalance your own pending jobs.** If a job still pends after ~15 min while another
    fitting type shows free GPUs, `scancel` that pending job (only your project's, by
-   job-name prefix; re-point its dependents first, §5 Dependencies) and resubmit it on the free type. Pending time is infrastructure, not a G5 failure.
+   job-name prefix; re-point its dependents first, §5 Dependencies) and resubmit it on
+   the free type. Pending time is infrastructure, not a G5 failure.
 9. **Record** the chosen type, the alternatives and what you saw for them in the job's
    ledger entry, and log its GPU-hours under that type (G4).
 
@@ -445,7 +446,7 @@ for in a near-disaster or a false alarm:
 These are the failure modes the skill hit on its first real end-to-end run. Each is
 named so you can match a symptom to a recovery without re-deriving it, and each notes
 whether it is an **agent-code** bug (counts toward the G5 failure streak) or an
-**infrastructure** failure (does **not** count — see `autonomy-model.md` §G5).
+**infrastructure** failure (does **not** count — see the G5 rule in `autonomy-model.md`).
 
 ### 9.1 Connection auth fails or prompts unexpectedly (L1)
 See §1 for the full mechanics. The two field-tested checks, in order:
@@ -560,5 +561,5 @@ job-design bug.
 Infrastructure failures must **not** increment the G5 consecutive-failure streak
 (`.failure_streak.json`). Record each explicitly with `counted_in_streak: false`. Only a genuinely new bug in agent-written code (e.g. an OOM
 you introduced in preprocessing, a wrong wrapper, a logic error) increments the streak.
-When in doubt, ask: *"did my code have a bug, or did the cluster misbehave?"* See
-`autonomy-model.md` §G5 for the canonical rule and ledger shape.
+When in doubt, ask: *"did my code have a bug, or did the cluster misbehave?"* See the G5
+rule in `autonomy-model.md` for the canonical rule and ledger shape.

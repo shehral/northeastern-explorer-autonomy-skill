@@ -22,7 +22,7 @@ A change that entangles the two (e.g. hard-coding an Explorer detail into the gu
 
 ## 3. How to test a change
 
-Use the skill-creator eval loop. The prompt set lives at `evals/evals.json` — five task prompts that exercise the core behaviors (overnight self-managing run, heartbeat/Monitor setup, garbage-output and no-op debug, first-real-run field test, GPU-type placement), each with an `expected_output` describing what a correct answer must cover.
+Use the skill-creator eval loop. The prompt set lives at `evals/evals.json` — six task prompts that exercise the core behaviors (overnight self-managing run, heartbeat/Monitor setup, garbage-output and no-op debug, first-real-run field test, GPU-type placement, a job pending forever plus a resumed session), each with an `expected_output` describing what a correct answer must cover.
 
 The benchmark idea, at a high level:
 
