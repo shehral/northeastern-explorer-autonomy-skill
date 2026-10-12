@@ -83,8 +83,9 @@ Synthesized across real verifiers — adapt the domain-specific ones:
 
 ### Degrade gracefully, never block on missing infrastructure
 A verifier run on a dev box (no GPU, no smoke fixture) should fall back to **static
-checks only** and PASS with a WARN — never FAIL for lack of a fixture. On the login
-node (fixture cached), it runs the full smoke with numerical assertions. The rule:
+checks only** and PASS with a WARN — never FAIL for lack of a fixture. In a short CPU
+job on the cluster (fixture cached; never on the login node, which kills heavy work
+silently), it runs the full smoke with numerical assertions. The rule:
 always provide *some* coverage; never make the absence of infrastructure a hard stop.
 
 ## Why this layer is what makes autonomy sustainable

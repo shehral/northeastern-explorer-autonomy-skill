@@ -33,7 +33,9 @@ MODEL_DIR_GLOB="$ALLOC/hf_cache/hub/models--<org>--<model>"  # CUSTOMIZE: pre-ca
 # --- Modules + conda (PATH-export, NOT `source activate`) -------------------
 source /etc/profile
 module purge
-module load miniconda3/24.11.1 cuda/12.3.0            # Explorer-wide pins; change only if adapting to another cluster (do not float CUDA)
+module load miniconda3/24.11.1                        # Explorer-wide pin. No cuda/* module: pip torch wheels carry
+                                                      # their own runtime (cluster-setup.md s3); load one only to
+                                                      # compile CUDA extensions, matching the wheel's CUDA version.
 export PATH=$ENV/bin:$PATH
 PYTHON=$ENV/bin/python                                # always use $PYTHON, never bare `python`
 
@@ -42,7 +44,7 @@ export HF_HOME=$ALLOC/hf_cache
 export TORCH_HOME=$ALLOC/torch_cache
 mkdir -p "$HF_HOME" "$TORCH_HOME"
 
-# --- Offline mode (MANDATORY on compute nodes; see cluster-setup.md s4) -----
+# --- Offline mode (MANDATORY on every GPU job; see cluster-setup.md s4) -----
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 
@@ -58,11 +60,15 @@ export HF_HUB_DISABLE_PROGRESS_BARS=1
 
 # --- Sanity: GPU + torch ----------------------------------------------------
 nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv 2>&1 | head -5 || true
-$PYTHON -c "import torch; assert torch.cuda.is_available(); print('torch', torch.__version__, torch.cuda.get_device_name(0))"
+# A one-element CUDA op, not just is_available(): an env built without this GPU's
+# architecture passes is_available() and then dies with "no kernel image".
+$PYTHON -c "import torch; assert torch.cuda.is_available(); x=torch.ones(1,device='cuda'); assert (x+1).item()==2; print('torch', torch.__version__, torch.cuda.get_device_name(0), torch.cuda.get_device_capability(0), 'bf16' if torch.cuda.is_bf16_supported() else 'no-bf16')"
 
-# --- Pre-flight gate: model must be pre-cached (else offline load -> zeros) --
-ls -d $MODEL_DIR_GLOB >/dev/null 2>&1 || {
-  echo "FATAL: model snapshot not in HF cache. Pre-cache on the LOGIN node first."
+# --- Pre-flight gate: the pinned snapshot must be complete in the cache ------
+# A bare folder check passes on a half-downloaded or wrong-revision cache.
+SNAP="$MODEL_DIR_GLOB/snapshots/<revision>"                 # CUSTOMIZE: REVISION (commit sha)
+[ -f "$SNAP/config.json" ] && ls "$SNAP"/*.safetensors "$SNAP"/*.bin >/dev/null 2>&1 || {
+  echo "FATAL: pinned snapshot incomplete in HF cache. Pre-cache in a CPU job (srun -p short) first."
   exit 2
 }
 

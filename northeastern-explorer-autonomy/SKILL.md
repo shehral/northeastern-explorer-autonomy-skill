@@ -68,8 +68,9 @@ account's values before first use** — the rest of the skill and the bundled
 | `ALLOC` | `/projects/<group>/<user>` | your persistent project allocation (NOT `/scratch`, NOT `/home`) |
 | `SLURM_ACCOUNT` | `<slurm-account>` | the `--account` your allocation bills to |
 | `CONDA_ENV` | `$ALLOC/conda_envs/<conda-env>` | your pinned conda env path |
-| `MODULES` | `miniconda3/24.11.1 cuda/12.3.0` | pinned module versions (Explorer-wide; do not float CUDA) |
-| `HF_CACHE` | `$ALLOC/hf_cache` | model cache (pre-populated on login node) |
+| `MODULES` | `miniconda3/24.11.1` | pinned module versions (Explorer-wide). No `cuda/*` module for pip-installed torch: the wheel carries its own CUDA runtime (`references/cluster-setup.md` §3) |
+| `HF_CACHE` | `$ALLOC/hf_cache` | model cache (pre-populated by a CPU pre-cache job, never on the login node) |
+| `PROXY` | `<squid-proxy-ip>:3128` | the cluster's squid proxy (from the research-computing docs); exported **only** inside CPU pre-cache jobs |
 | `MODEL_ID` / `REVISION` | `<org>/<model>` @ `<revision>` | your pinned model + commit (if you use a model hub) |
 | `DAILY_GPU_BUDGET` | `24` H200-hours | G4 soft cap per day (tune) |
 | `FAIL_STREAK_MAX` | `3` | G5 consecutive-agent-bug auto-rollback threshold (tune) |
@@ -93,9 +94,10 @@ guardrails are portable; only the connection/env/partition details change.
    8h). **Always go through the configured `<alias>`, never the raw hostname** —
    connecting by hostname bypasses the `IdentityFile`/`ControlMaster` config and fails
    with a GSSAPI `Permission denied`. See `references/cluster-setup.md` §1.
-2. **Pre-cache the model on the LOGIN node** (compute nodes are offline — see G-rule
-   below). `references/cluster-setup.md` §2. Never load the model on the login node
-   itself; it has a ~8 GB effective RAM cap and will OOM-kill you.
+2. **Pre-cache the model in a CPU job (`srun -p short`), never on the login node**, then
+   prove an offline load works in that same CPU job before any GPU time is spent (GPU
+   jobs run offline — see the rule below). `references/cluster-setup.md` §2. The login
+   node has a ~8 GB effective RAM cap and kills heavy work silently.
 3. **Smoke-test the experiment locally or on `gpu-short`** for ~60s on one input
    **before** any `gpu` submission (Guardrail G1; ~5000:1 cost asymmetry). Validate the
    **actual artifact you'll submit**: include at least one real `sbatch` smoke, not only
@@ -120,10 +122,11 @@ guardrails are portable; only the connection/env/partition details change.
 
 ## The one rule that prevents the most expensive failure
 
-**Compute nodes on Explorer have no internet (no Squid proxy passthrough).** A
-HuggingFace load without offline mode silently 503s and falls back to **meta-init
-zeros** — the model loads "successfully" and then generates garbage forever, burning
-your whole walltime on noise. So on **every** compute-node job:
+**GPU jobs run offline.** Compute nodes reach the internet **only** when a job exports
+the squid proxy itself (`PROXY`; do not rely on inheritance), and you use the proxy
+**only in CPU pre-cache jobs**. Every GPU job runs offline, so a missing file fails
+loudly at load time instead of the job hanging, retrying, or silently resolving a
+different revision mid-run:
 
 ```bash
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1     # in the sbatch
@@ -133,7 +136,9 @@ AutoModel...from_pretrained(MODEL_ID, revision=REV, local_files_only=True)  # in
 ```
 
 Pre-caching (step 2) and offline-mode (this rule) are an inseparable pair — neither
-works without the other. Full reasoning in `references/cluster-setup.md` §4.
+works without the other. Some libraries call the hub API even for cached files and
+crash under offline mode, which is why step 2 ends with an offline load test on a CPU
+node. Full reasoning in `references/cluster-setup.md` §2 and §4.
 
 ### Field-tested gotchas (from the first real end-to-end run)
 

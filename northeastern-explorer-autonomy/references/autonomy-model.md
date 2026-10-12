@@ -76,7 +76,7 @@ cluster misbehave?" Record the classification explicitly.
 - **Persistent-Monitor rule (>1h jobs).** A default-timeout Monitor dies mid-watch
   on a 7h job and silently misses the verdict. `persistent: true`; a missing output
   file is normal early on, not a dead-monitor signal.
-- **Offline-mode rule (compute nodes).** (See `cluster-setup.md` §4.) Non-negotiable.
+- **Offline-mode rule (GPU jobs).** (See `cluster-setup.md` §4.) Non-negotiable.
 - **End-to-end wiring check.** Before any with-module-vs-vanilla comparison,
   generate one token with the module active and assert the metric (e.g. an EOS-logit
   delta) is **nonzero**. Catches the "hook registered but never invoked" bug that makes

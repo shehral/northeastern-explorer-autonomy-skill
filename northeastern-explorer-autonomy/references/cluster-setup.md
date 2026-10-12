@@ -9,7 +9,7 @@ anatomy, and loader gotchas. Replace the `Customization Points` values from `SKI
 1. Connection (SSH, ControlMaster, Duo, login-node limits)
 2. Allocation & storage (where files go, pre-caching)
 3. Environment activation (modules, conda, the PATH-export pattern)
-4. The offline rule (why compute nodes need it; the proxy split)
+4. The offline rule (GPU jobs offline; the proxy only in CPU pre-cache jobs)
 5. Partitions, GPUs, walltime, queue hygiene
 6. Canonical sbatch anatomy
 7. Loader gotchas (bf16, attn impl, the `lm_head` tie fix)
@@ -44,14 +44,13 @@ ssh <user>@login.explorer.northeastern.edu        # SSH_TARGET
   fails with a `GSSAPI`/`Permission denied` error. The raw hostname is only the value of
   `HostName` *inside* the alias block; drive every connection (and every probe) through
   `<alias>`.
-- **Stale socket** (after a WiFi/IP change): remove the control socket
+- **Dead control socket** (after a WiFi/IP change): remove the control socket
   `~/.ssh/control-*<alias>*` and reconnect once.
 
 **Login-node limits:** the login node has a **~8 GB effective RAM
 cap** (whatever `free` reports — the per-user cap is what bites) and will SIGKILL
 (`exit 137`) heavy work. **Never** load the model, run a big `du`, or do real compute
-there. Delegate to a compute node with `srun`/`sbatch`. The one allowed heavy-ish
-login-node task is pre-caching downloads (§2), which is I/O not RAM.
+there. Delegate to a compute node with `srun`/`sbatch`, including pre-caching (§2).
 
 **The kill is SILENT — know the signature.** A login-node SIGKILL often produces
 **no output at all**: no traceback, no "Killed" line, just a command that ran and
@@ -69,26 +68,46 @@ rather than in a login-node loop.
 - **`/scratch/$USER` is purged monthly** (first Tuesday). **`/home/$USER`** has a low
   inode cap — do **not** put the HF cache there. Both are footguns; default to `ALLOC`.
 - **HF cache:** `$ALLOC/hf_cache` (`HF_CACHE`). **Torch cache:** `$ALLOC/torch_cache`.
-- **Pre-caching rule:** models must be downloaded to `HF_CACHE` from the **login node**
-  (which has proxy internet) *before* the first compute-node job, because compute nodes
-  are offline (§4). A short pre-cache run:
+- **Pre-caching rule:** pre-cache in a CPU job, never on the login node, *before* the
+  first GPU job (GPU jobs run offline, §4):
 
   ```bash
-  ssh explorer 'srun -p short --time=00:30:00 --mem=32G --cpus-per-task=4 \
+  ssh <alias> 'srun -p short --time=00:30:00 --mem=32G --cpus-per-task=4 \
       bash '"$ALLOC"'/scripts/preload_model.sh'
   ```
 
-  The preload script sets the login-node proxy env, then does a normal (online)
-  `from_pretrained(MODEL_ID, revision=REVISION)` so the snapshot lands in `HF_CACHE`.
+  The script exports the proxy (§4) and calls
+  `snapshot_download(repo_id, revision=<sha>)`. `snapshot_download(revision=<sha>)`
+  writes no `refs/main`, so offline loads must pass the same `revision=<sha>` (or you
+  write `refs/main` yourself).
+- **End every pre-cache with an offline load test in the same CPU job.** Unset the
+  proxy, set `HF_HUB_OFFLINE=1`, and load every artifact the GPU job will load, through
+  the same library calls. Some libraries list repo files through the hub API even when
+  every file is cached, so offline mode crashes them although the cache is complete;
+  this test catches that before any GPU time is spent. Fix it by recording what the
+  call returns during pre-cache and serving it from a file in the GPU job.
+- **Check the cache, not just the folder.** `ls -d models--<org>--<model>` passes on a
+  half-downloaded or wrong-revision cache. Check for `snapshots/<rev>/config.json` plus
+  at least one weight file. The same applies to environments: a half-built venv (for
+  example from a cancelled install) has `bin/python` but nothing in site-packages, so
+  check `pyvenv.cfg` **and** that the packages import before trusting it.
 
 ## 3. Environment activation
 
-Pinned modules (do **not** float CUDA — `cuda/12.8` is too new for torch 2.4.1 wheels
-built against 12.4; 12.3 driver runs them fine):
-
 ```bash
-module load miniconda3/24.11.1 cuda/12.3.0          # MODULES
+module load miniconda3/24.11.1                      # MODULES
 ```
+
+Do not load a `cuda/*` module for pip-installed torch; the wheel carries its own
+runtime. Load one only to compile CUDA extensions, matching the wheel's CUDA version.
+The node's driver caps what runs, and drivers differ by node (field-observed: 570.86,
+i.e. CUDA 12.8, on T4 and H200 nodes; 545.23 on a V100 node). cu12x wheels ran on
+both; cu13x wheels need NVIDIA's forward-compat libs on `LD_LIBRARY_PATH`. Print the
+driver (`nvidia-smi`) in the smoke on each GPU type you route to (§5.1).
+
+When you print package versions to verify an env, use
+`importlib.metadata.version("<dist>")`: not every package defines `__version__`, and a
+crashing check marks a good install as FAILED.
 
 Activate the conda env by **prepending its bin to PATH**, not `source activate` — in a
 non-interactive sbatch shell `source activate` is fragile and ordering-dependent, and
@@ -110,15 +129,20 @@ export CUBLAS_WORKSPACE_CONFIG=:4096:8              # deterministic cuBLAS
 
 ## 4. The offline rule (the single most expensive footgun)
 
-**Compute nodes cannot reach the internet.** The Squid proxy is reachable **only from
-the login node**. `--export=ALL` propagates the proxy env vars to the job, but the
-endpoint itself is unreachable from compute nodes, so HF API calls there silently 503.
+Compute nodes reach the internet **only** when the job exports the squid proxy itself
+(`export http_proxy=http://<squid-proxy-ip>:3128 https_proxy=... HTTP_PROXY=...
+HTTPS_PROXY=... no_proxy=localhost,127.0.0.1`). Do not rely on inheritance. Use the
+proxy **only in CPU pre-cache jobs**. GPU jobs run **offline**
+(`HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1`, `local_files_only=True`), so a missing file
+fails loudly at load time instead of the job hanging, retrying, or silently resolving a
+different revision.
 
-If offline mode is **not** set, `from_pretrained` swallows the failure and falls back
-to **meta-init zeros** — the model "loads," then generates pure noise for the entire
-walltime. You lose the whole job to garbage and it looks like it ran.
+Offline mode does not protect against a checkpoint whose weights are missing or
+mis-tied: that loads "successfully" with freshly initialized tensors and generates
+garbage (the `lm_head` case in §7; `long-job-patterns.md` §9). Assert an invariant only
+the real weights satisfy.
 
-Belt-and-suspenders — set all of these on every compute-node job (the offline-mode rule):
+Set all of these on every GPU job (the offline-mode rule):
 
 ```bash
 # in the sbatch:
@@ -133,10 +157,9 @@ model = AutoModelForImageTextToText.from_pretrained(
 proc  = AutoProcessor.from_pretrained(MODEL_ID, revision=REVISION, local_files_only=True)
 ```
 
-The login-node proxy (for pre-caching only) looks like:
-`export http_proxy=http://<squid-proxy-ip>:3128 https_proxy=http://<squid-proxy-ip>:3128`
-(+ upper-case variants, `no_proxy=localhost,127.0.0.1`). Set it explicitly in the
-preload script; do not rely on inheritance.
+`<squid-proxy-ip>` is the `PROXY` Customization Point (from the cluster's
+research-computing docs). Export it explicitly in the pre-cache script, and nowhere
+else.
 
 ## 5. Partitions, GPUs, walltime, queue hygiene
 
@@ -178,8 +201,8 @@ the work         → $PYTHON code/<script>.py --args ...
 
 - **bf16 only.** Never int4/int8; never quantize the KV cache. `do_sample=False`
   (greedy) for diagnostics; pin and log every seed.
-- **Attention impl:** `attn_implementation="eager"` when extracting attention/doing
-  interpretability; `"sdpa"` for routine generation.
+- **Attention impl:** `attn_implementation="eager"` when extracting attention or
+  hooking internals; `"sdpa"` for routine generation.
 - **`lm_head` tie fix — [EXAMPLE, delete if you adapt to another model].** This is
   specific to one Qwen-VL-family checkpoint: the
   checkpoint omits `lm_head.weight` and relies on `tie_word_embeddings`, but
@@ -201,8 +224,9 @@ the work         → $PYTHON code/<script>.py --args ...
 - **Record WHY each pin can't move.** Pins interlock: an inference engine's newer
   wheels may target a CUDA the driver doesn't have, while the older engine breaks on
   a newer `transformers` API — so *neither* pin can float, and a "harmless" upgrade
-  of one bricks the other. A one-line comment per pin ("cuda/12.3 because torch X
-  wheels", "engine Y because driver Z") turns a future debugging session into a read.
+  of one bricks the other. A one-line comment per pin ("engine Y pinned because its
+  newer wheels target CUDA 13 and the driver is 12.8") turns a future debugging
+  session into a read.
 - **New model on a pinned engine? Check the engine's model registry FIRST** — before
   designing any experiment around the model. A serving engine given an architecture
   it doesn't support may silently fall back to a related implementation and die deep
