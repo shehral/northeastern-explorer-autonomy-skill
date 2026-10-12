@@ -57,7 +57,9 @@ DIM_BATCH = 32 if gb >= 100 else 12 if gb >= 70 else 4   # H200 / A100-80 / smal
 ```
 
 Pick the dtype from the device the same way
-(`torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32`). The
+(`torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float32`;
+not `torch.cuda.is_bf16_supported()`, which also returns True on T4/V100 through
+emulation). The
 same sbatch then runs correctly on whatever GPU type has capacity, which is
 exactly what an autonomous scheduler needs — type choice becomes a queue-time
 decision (`cluster-setup.md` §5.1), not a code change.

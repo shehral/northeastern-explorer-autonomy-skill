@@ -243,7 +243,9 @@ every GPU submission:
 6. **Submit to the type that fits and frees up soonest.** For short jobs, prefer an idle
    smaller GPU over a queued faster one; a small job on a big GPU also risks IdleBot
    under-utilisation. Never use bare `--gres=gpu:1` unless the code picks its dtype from
-   the device (`torch.cuda.is_bf16_supported()`) and the arch list covers every type.
+   the device's compute capability (`torch.cuda.get_device_capability()[0] >= 8` for
+   bf16; `is_bf16_supported()` also returns True on T4/V100 through emulation) and the
+   arch list covers every type.
 7. **Spread embarrassingly parallel sweeps.** Split items across several single-GPU jobs
    on different free types, within the QOS caps, with interleaved shards
    (`long-job-patterns.md` §1) and per-item idempotent outputs. Overlapping one item
