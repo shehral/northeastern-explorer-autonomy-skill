@@ -41,6 +41,7 @@ module load miniconda3/24.11.1                        # Explorer-wide pin. No cu
                                                       # compile CUDA extensions, matching the wheel's CUDA version.
 export PATH=$ENV/bin:$PATH
 PYTHON=$ENV/bin/python                                # always use $PYTHON, never bare `python`
+[ -f "$ENV/.built-ok" ] || { echo "FATAL: env $ENV not marked built (.built-ok)"; exit 2; }   # cluster-setup.md s3
 
 # --- Cache paths (on the persistent allocation, never /tmp) -----------------
 export HF_HOME=$ALLOC/hf_cache

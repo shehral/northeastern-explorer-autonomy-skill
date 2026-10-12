@@ -111,12 +111,23 @@ Do not load a `cuda/*` module for pip-installed torch; the wheel carries its own
 runtime. Load one only to compile CUDA extensions, matching the wheel's CUDA version.
 The node's driver caps what runs, and drivers differ by node (field-observed: 570.86,
 i.e. CUDA 12.8, on T4 and H200 nodes; 545.23 on a V100 node). cu12x wheels ran on
-both; cu13x wheels need NVIDIA's forward-compat libs on `LD_LIBRARY_PATH`. Print the
+both; cu13x wheels need NVIDIA's forward-compat libs on `LD_LIBRARY_PATH` (recipe at the end
+of this section). Print the
 driver (`nvidia-smi`) in the smoke on each GPU type you route to (§5.1).
 
 When you print package versions to verify an env, use
 `importlib.metadata.version("<dist>")`: not every package defines `__version__`, and a
 crashing check marks a good install as FAILED.
+
+**Treat a working env as immutable.** Never force-reinstall into it: a forced torch
+reinstall once broke an inference engine built against the old torch. For extra
+packages:
+1. Layer a venv: `<base-env>/bin/python -m venv --system-site-packages <new-env>`.
+2. `pip install` the additions in a CPU job on `short` with the proxy.
+3. Save `pip freeze` and print `module.__file__` for the key imports.
+
+End every env build by writing `<env>/.built-ok`. Jobs check that marker (plus the §2
+import check), not just `bin/python`; the template does.
 
 Activate the conda env by **prepending its bin to PATH**, not `source activate` — in a
 non-interactive sbatch shell `source activate` is fragile and ordering-dependent, and
@@ -135,6 +146,19 @@ export HF_HOME=$ALLOC/hf_cache TORCH_HOME=$ALLOC/torch_cache
 mkdir -p "$HF_HOME" "$TORCH_HOME"
 export CUBLAS_WORKSPACE_CONFIG=:4096:8              # deterministic cuBLAS
 ```
+
+**CUDA 13 wheels on a 12.8 driver (forward compatibility).** If a package forces a
+cu13x torch:
+1. In a CPU job on `short` with the proxy, download NVIDIA's `cuda-compat-13-0` el9 RPM.
+2. Unpack it with `rpm2cpio <rpm> | cpio -idm` under `$ALLOC/cuda-compat`.
+3. In every GPU job, before any Python, run
+   `export LD_LIBRARY_PATH=$ALLOC/cuda-compat/usr/local/cuda-13.0/compat:$LD_LIBRARY_PATH`.
+   Load no `cuda/*` module.
+4. In the smoke, check `torch.cuda.is_available()`, a matmul and the engine import, on
+   each GPU type you route to. This has been field-verified on H200 only.
+
+CUDA 13 dropped Volta, so cu13x stacks never run on V100. Prefer cu128 builds when your
+packages allow, and keep a cu128 fallback env.
 
 ## 4. The offline rule (the single most expensive footgun)
 
@@ -380,6 +404,10 @@ the signalled, failing and clean paths exit 0, the script's code, and 0.)
   inside its own startup profiling with a misleading shape error (cost: an hour of
   confusion, minimum). One import of the engine's model registry on a compute node
   answers it in seconds.
+- **Inference-engine entry points.** Build the engine under `if __name__ == "__main__":`.
+  When the engine uses the `spawn` start method (for example after a multimodal warm-up
+  has initialised CUDA), the child re-imports your script, and an unguarded engine fails
+  at startup.
 
 ## 8. Data movement (laptop ↔ cluster)
 

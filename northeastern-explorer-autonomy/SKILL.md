@@ -69,7 +69,7 @@ account's values before first use** — the rest of the skill and the bundled
 | `SSH_ALIAS` | `<alias>` | a `Host <alias>` block in `~/.ssh/config` with `HostName login.explorer.northeastern.edu`, `User <user>`, an authorized `IdentityFile`, `ControlMaster auto`, `ControlPath`, `ControlPersist 8h`. Every ssh/scp/rsync goes through the alias. |
 | `ALLOC` | `/projects/<group>/<user>` | your persistent project allocation (NOT `/scratch`, NOT `/home`) |
 | `SLURM_ACCOUNT` | `<slurm-account>` | the `--account` your allocation bills to |
-| `CONDA_ENV` | `$ALLOC/conda_envs/<conda-env>` | your pinned conda env path |
+| `CONDA_ENV` | `$ALLOC/conda_envs/<conda-env>` | your pinned conda env path; write `<env>/.built-ok` when a build finishes (the template refuses an unmarked env) |
 | `MODULES` | `miniconda3/24.11.1` | pinned module versions (Explorer-wide). No `cuda/*` module for pip-installed torch: the wheel carries its own CUDA runtime (`references/cluster-setup.md` §3) |
 | `HF_CACHE` | `$ALLOC/hf_cache` | model cache (pre-populated by a CPU pre-cache job, never on the login node) |
 | `PROXY` | `<squid-proxy-ip>:3128` | the cluster's squid proxy (from the research-computing docs). Jobs inherit it from the login shell: export it explicitly in CPU pre-cache jobs, **unset** it in GPU jobs |

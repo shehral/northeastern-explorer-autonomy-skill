@@ -60,7 +60,7 @@ The skill ships with `<angle-bracket>` placeholders for every account-specific v
 | `<alias>` / `<user>` | Your SSH-config `Host` alias and Explorer username | Every ssh/scp/rsync goes through the alias (`HostName login.explorer.northeastern.edu`, key, ControlMaster) |
 | `/projects/<group>/<user>` | Your project allocation path | Persistent storage for everything that must survive (not `/scratch`, not `/home`) |
 | `<slurm-account>` | Your SLURM account | The `--account` your GPU time bills to |
-| `$ALLOC/conda_envs/<conda-env>` | Your pinned conda env path | The environment activated via PATH-export in jobs |
+| `$ALLOC/conda_envs/<conda-env>` | Your pinned conda env path | The environment activated via PATH-export in jobs. Write `<env>/.built-ok` once a build finishes: the template exits if the marker is missing |
 | `$ALLOC/hf_cache` | Your model cache path | Pre-populated by a CPU pre-cache job (`srun -p short`) before any GPU job |
 | `<squid-proxy-ip>` | The cluster's squid proxy address (from the research-computing docs) | Jobs inherit it from the login shell; exported explicitly in CPU pre-cache jobs and unset in GPU jobs |
 | `<type>` | A GPU type per job (`h200`, `a100`, `v100-sxm2`, `v100-pcie`, `t4`) | Chosen per job with `references/cluster-setup.md` §5.1 |
