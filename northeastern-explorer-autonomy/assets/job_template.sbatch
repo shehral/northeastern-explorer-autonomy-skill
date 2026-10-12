@@ -9,7 +9,7 @@
 # --export splits on commas.
 # See references/cluster-setup.md for the reasoning behind every line.
 # ============================================================================
-#SBATCH --job-name=<jobname>              # or set at submit time: sbatch --job-name=...
+#SBATCH --job-name=<jobname>              # or set at submit time; start it with your project's prefix (autonomy-model.md)
 #SBATCH --partition=gpu                  # 8h cap; use gpu-short (<=2h) for smoke/pre-flight
 #SBATCH --account=<slurm-account>                 # CUSTOMIZE: SLURM_ACCOUNT
 #SBATCH --gres=gpu:<type>:1               # CUSTOMIZE per cluster-setup.md s5.1 (h200 | a100 | v100-sxm2 | v100-pcie | t4)

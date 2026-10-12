@@ -316,8 +316,8 @@ every GPU submission:
    across two types gives a cheap cross-hardware check; do not assume bit-identical
    results in general (TF32 or different kernels change them).
 8. **Rebalance your own pending jobs.** If a job still pends after ~15 min while another
-   fitting type shows free GPUs, `scancel` that pending job (your own only; re-point its
-   dependents first, §5 Dependencies) and resubmit it on the free type. Pending time is infrastructure, not a G5 failure.
+   fitting type shows free GPUs, `scancel` that pending job (only your project's, by
+   job-name prefix; re-point its dependents first, §5 Dependencies) and resubmit it on the free type. Pending time is infrastructure, not a G5 failure.
 9. **Record** the chosen type, the alternatives and what you saw for them in the job's
    ledger entry, and log its GPU-hours under that type (G4).
 

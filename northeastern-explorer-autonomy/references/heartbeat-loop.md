@@ -32,7 +32,7 @@ the *shape* is what's portable):
    type to today's `.compute_budget.json`.
 6. **Decide & maybe submit.** Pick the top candidate experiment; run the **five
    guardrails** (G1–G5). If all pass and it's within the T1 walltime cap, choose its GPU
-   type (`cluster-setup.md` §5.1; also move any of your own jobs that have pended
+   type (`cluster-setup.md` §5.1; also move any of your project's jobs that have pended
    ~15 min while a fitting type sits free), submit, and
    **arm a persistent Monitor** (next section). Otherwise, surface it as a
    recommendation (T2) rather than firing.

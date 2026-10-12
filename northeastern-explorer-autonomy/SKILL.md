@@ -188,8 +188,9 @@ Classify every candidate action into a **tier**, and gate the auto-acting tier b
   ≤ a walltime cap, **only if all five guardrails pass**.
 - **T2 — do it, but surface in the next heartbeat:** new experiment designs, large
   code changes, new-checkpoint/cross-family runs.
-- **T3 — never auto; escalate to the human:** destructive ops (`rm -rf`, force-push,
-  cancelling others' jobs), external comms, **modifying your own protocol or the
+- **T3 — never auto; escalate to the human:** destructive ops (`rm -rf`, force-push;
+  cancelling, holding or modifying any job outside your project's job-name prefix,
+  even under your own user), external comms, **modifying your own protocol or the
   user's CLAUDE.md**, touching restricted/production artifacts.
 
 The **five guardrails** that gate T1:
