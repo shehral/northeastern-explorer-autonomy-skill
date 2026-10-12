@@ -182,21 +182,38 @@ every GPU job.
 
 ## 5. Partitions, GPUs, walltime, queue hygiene
 
-- **`gpu`** — 8h hard walltime cap. **`gpu-short`** — ≤2h, good for smoke/pre-flight.
-- Choose the GPU type per job (§5.1); never hard-code one. Bill to
-  `--account=<slurm-account>`.
-- **Per-user QOS caps apply across all GPU types.** Verified 2026-10-11
-  (MaxSubmitPU | MaxJobsPU | MaxTRESPU): `gpu` 8 | 4 | 4 GPUs, `gpu-short` 8 | 2 | 2 GPUs,
-  `courses-gpu` none | 2 | 2 GPUs, `multigpu` 8 | 4 | 8 GPUs, `gpu-interactive` 4 | 2.
-  A job over the running cap pends with `QOSMaxJobsPerUserLimit`. Re-check yours, since
-  your account may map to a different QOS:
-  `sacctmgr -n -P show assoc user=$USER format=account,partition,qos` and
-  `sacctmgr -n -P show qos format=Name,MaxSubmitPU,MaxJobsPU,MaxTRESPU`. Every job under
-  your user counts, including ones from your other projects, so count with
-  `squeue -u $USER` before planning concurrency. Array tasks count individually toward
-  MaxSubmitPU; `sacct -X` collapses a pending array into one row, so count queued tasks
-  with `squeue -u $USER -h -r -o %i`. Stage submissions instead of bulk-submitting into
-  a rejection.
+**Partitions and limits** (verified 2026-10-12 with
+`sacctmgr -n -P show qos format=Name,MaxTRES,MaxTRESPU,MaxJobsPU,MaxSubmitPU`, where
+MaxTRES is the per-job cap, and `scontrol show partition <p>`; re-check, they change):
+
+| Partition | Use | Default / max time | GPUs per job | Per user: running / queued / GPUs | Access |
+|---|---|---|---|---|---|
+| `short` | CPU: pre-cache, env builds, statistics, aggregation | 4 h / 48 h | — | 50 jobs, 1024 CPUs | all |
+| `gpu` | GPU work | 4 h / 8 h | 1 | 4 / 8 / 4 | all |
+| `gpu-short` | smokes, short and 2-GPU jobs | 1 h / 2 h | 2 | 2 / 8 / 2 | all |
+| `gpu-interactive` | interactive `srun` / OOD | 1 h / 2 h | 1 | 2 / 4 / — | all |
+| `courses-gpu` | course work only | 4 h / 24 h | 1 | 2 / — / 2 | a course unix group |
+| `multigpu` | more than 2 GPUs per job | — | — | — | restricted; ask Research Computing (T3) |
+
+- Omitting `--time` gives the partition's **default**, not its maximum. Omitting `--mem`
+  gives 2 GB per CPU (`DefMemPerCPU`).
+- A job asking for more GPUs than the per-job cap is accepted and then **pends forever**
+  with reason `QOSMaxGRESPerJob`. That is not queueing: cancel it and resize. DDP or
+  tensor-parallel work must fit 2 GPUs × 2 h chunks on `gpu-short`, with checkpoints.
+- A job over the running cap pends with `QOSMaxJobsPerUserLimit` until one of yours ends.
+- `gpu`, `gpu-short` and `gpu-interactive` share the same nodes, so spreading across them
+  adds job slots, not hardware.
+- The caps apply across all GPU types and count every job under your user, including
+  other projects and sessions (`squeue -u $USER`). Your account may map to a different
+  QOS: `sacctmgr -n -P show assoc user=$USER format=account,partition,qos`.
+- **Access is set by the partition, not by the account you bill.**
+  `scontrol show partition <p>` shows AllowAccounts/AllowGroups/AllowQos; the course
+  partition is gated by a unix group (`id -Gn`). Choose the GPU type per job (§5.1) and
+  bill each project to its own `--account=<slurm-account>`; never borrow another
+  project's account.
+- Array tasks count individually toward MaxSubmitPU; `sacct -X` collapses a pending
+  array into one row, so count queued tasks with `squeue -u $USER -h -r -o %i`. Stage
+  submissions instead of bulk-submitting into a rejection.
 - **IdleBot cancels GPU jobs that sit under-utilised for an hour.** An email arrives at
   about 15 min, and `gpu-logs <jobid>` shows the record. CPU-heavy phases (statistics,
   probe fits, aggregation, data prep) go to `-p short`, never inside a GPU allocation.
@@ -235,7 +252,13 @@ every GPU submission:
    `sinfo -p gpu-short -N -h -O NodeHost,Gres,GresUsed,StateLong` (use `-p gpu` for long
    jobs). Pending demand per type: `squeue -p gpu,gpu-short -h -t PD -o '%b' | sort | uniq -c`.
    Down or drained nodes and requests for types that no longer exist inflate the totals.
-4. **Your caps** (§5). They apply across all types, so splitting does not raise them.
+   Node RAM can block a free GPU: GPU nodes share their RAM across 3-8 GPUs, and a node
+   with a free GPU may have almost no unallocated memory. Compare `Memory − AllocMem`
+   from `sinfo -p <p> -N -h -O NodeHost,Gres,GresUsed,Memory,AllocMem` (MB) with your
+   `--mem` (`FreeMem` is the OS's free RAM and does not drive scheduling). Request the
+   RAM the smoke measured, not a padded default.
+4. **Your caps** (§5): per user across all types, so splitting does not raise them,
+   and per job (1 GPU on `gpu`, 2 on `gpu-short`).
 5. **Start estimates are a weak hint.** `sbatch --test-only --gres=gpu:<type>:1 ...` gives
    backfill estimates. In one field run they said 28 min for a type with an idle node
    that then started in 28 s, and `squeue --start` returned N/A. Use them to break ties,
@@ -464,7 +487,10 @@ free. Choose the type with §5.1, which reads free GPUs per node and your caps.
 **(c) Size `--time` from the smoke, and don't undercut it.** Shorter walltime backfills
 faster and schedules sooner, but estimate the real runtime from the **per-item time
 measured in the G1 smoke** × item count, plus margin for load/aggregation. Undercutting
-that estimate just buys you a §9.4(a) timeout.
+that estimate just buys you a §9.4(a) timeout. You can lower a job's limit
+(`scontrol update JobId=<id> TimeLimit=<t>`), but raising it is admin-only, whether the
+job is pending or running (`man scontrol`). So size `--time` at submit, and make long
+jobs resumable rather than padding them to the cap.
 
 **G5 classification:** a walltime-timeout of code that did its real work, and pending
 time, are **infrastructure** — they do **not** count toward the failure streak.

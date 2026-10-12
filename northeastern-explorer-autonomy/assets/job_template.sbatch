@@ -14,8 +14,8 @@
 #SBATCH --account=<slurm-account>                 # CUSTOMIZE: SLURM_ACCOUNT
 #SBATCH --gres=gpu:<type>:1               # CUSTOMIZE per cluster-setup.md s5.1 (h200 | a100 | v100-sxm2 | v100-pcie | t4)
 #SBATCH --nodes=1 --ntasks=1 --cpus-per-task=8
-#SBATCH --mem=48G                        # pad for logit/activation buffers
-#SBATCH --time=02:00:00                  # <= partition cap; include ~30% margin
+#SBATCH --mem=48G                        # from the smoke's measured peak + margin; node RAM can bind before GPUs (cluster-setup.md s5.1)
+#SBATCH --time=02:00:00                  # <= partition cap; include ~30% margin; omitted --time = partition default (gpu 4 h, gpu-short 1 h), not the max
 #SBATCH --output=/projects/<group>/<user>/<proj>/logs/%x-%j.out   # CUSTOMIZE: ALLOC (#SBATCH lines are not
 #SBATCH --error=/projects/<group>/<user>/<proj>/logs/%x-%j.err    #  shell-expanded; %x = job name, %j = job id)
 #SBATCH --signal=B:USR1@600              # USR1 to the batch shell 10 min before the time limit
