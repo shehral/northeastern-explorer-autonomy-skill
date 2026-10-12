@@ -58,6 +58,19 @@ reserved for a higher-priority partition — see `scontrol show reservations` /
 `PreemptMode`, not your code). When in doubt, ask: "did my code have a bug, or did the
 cluster misbehave?" Record the classification explicitly.
 
+**Triage from evidence, not vibes.** First stop for any dead job:
+`sacct -j <id> --format=JobID,State,ExitCode,Elapsed,MaxRSS,ReqMem,NodeList`, then:
+
+| Signature | Read it as | Streak? |
+|---|---|---|
+| `TIMEOUT`, code was progressing (checkpoints advanced) | walltime under-provisioned — infrastructure | no |
+| `TIMEOUT`, no checkpoints ever written | code likely hung — agent code | yes |
+| `FAILED`, MaxRSS ≈ ReqMem | OOM: raise `--mem` and reclassify only if the leak is yours | usually no |
+| `FAILED` + Python traceback in `.err` | agent code | yes |
+| Login-node command produced **no output at all** | silent login-node SIGKILL (`cluster-setup.md` §1) — infrastructure | no |
+| Job "succeeded" but with-vs-without outputs are identical | silent no-op — agent code (wiring bug; see the end-to-end check) | yes |
+| `NODE_FAIL`, `CANCELLED` by admin, HF 5xx during pre-cache | infrastructure | no |
+
 ## Supporting safety rules (the load-bearing few)
 
 - **Persistent-Monitor rule (>1h jobs).** A default-timeout Monitor dies mid-watch

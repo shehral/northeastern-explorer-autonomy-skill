@@ -13,7 +13,8 @@ anatomy, and loader gotchas. Replace the `Customization Points` values from `SKI
 5. Partitions, GPUs, walltime, queue hygiene
 6. Canonical sbatch anatomy
 7. Loader gotchas (bf16, attn impl, the `lm_head` tie fix)
-8. Troubleshooting / field-tested failure modes (connection auth, smoke gate, node launch-kills, walltime/partition sizing)
+8. Data movement (laptop ↔ cluster) — authority split, never sync by deletion
+9. Troubleshooting / field-tested failure modes (connection auth, smoke gate, node launch-kills, walltime/partition sizing)
 
 ---
 
@@ -47,10 +48,18 @@ ssh <user>@login.explorer.northeastern.edu        # SSH_TARGET
   `~/.ssh/control-*<alias>*` and reconnect once.
 
 **Login-node limits:** the login node has a **~8 GB effective RAM
-cap** and will SIGKILL (`exit 137`) heavy work. **Never** load the model, run a big
-`du`, or do real compute there. Delegate to a compute node with `srun`/`sbatch`. The
-one allowed heavy-ish login-node task is pre-caching downloads (§2), which is I/O not
-RAM.
+cap** (whatever `free` reports — the per-user cap is what bites) and will SIGKILL
+(`exit 137`) heavy work. **Never** load the model, run a big `du`, or do real compute
+there. Delegate to a compute node with `srun`/`sbatch`. The one allowed heavy-ish
+login-node task is pre-caching downloads (§2), which is I/O not RAM.
+
+**The kill is SILENT — know the signature.** A login-node SIGKILL often produces
+**no output at all**: no traceback, no "Killed" line, just a command that ran and
+printed nothing. A ~200 MB parquet load or a few heavy imports back-to-back in a
+shell loop is enough. This *reads exactly like an agent-code bug* and is not one —
+classify it as **infrastructure** in the G5 streak (`autonomy-model.md`), move the
+work to `srun --partition=short --mem=48G`, and run per-item checks one at a time
+rather than in a login-node loop.
 
 ## 2. Allocation & storage
 
@@ -133,7 +142,15 @@ preload script; do not rely on inheritance.
 
 - **`gpu`** — 8h hard walltime cap. **`gpu-short`** — ≤2h, good for smoke/pre-flight.
 - Request the H200 explicitly: `--gres=gpu:h200:1`. Bill to `--account=<slurm-account>`.
-- **Concurrent-job limit** ~4 running GPU jobs/user; extras pend gracefully.
+- **Concurrent-job limit varies by QOS/account** — ~4 running GPU jobs on some,
+  a hard `QOSMaxSubmitJobPerUserLimit=2` on others. Don't assume: check with
+  `sacctmgr show assoc user=$USER format=account,qos` and observe; stage
+  submissions instead of bulk-submitting into a rejection.
+- **Job needs more than the 8h cap?** Don't fight the partition — design the job
+  resumable (atomic per-item checkpoints, exit-0-if-done; `long-job-patterns.md` §2)
+  and **chain it**: resubmit the same sbatch and it continues from checkpoints.
+  Queue the successor at submit time with `--dependency=afterany:<jobid>` (not
+  `afterok` — a TIMEOUT exits non-zero and `afterok` never fires, §5 below).
 - On TIMEOUT, exit is non-zero and `afterok` deps won't fire (`afternotok` will). For
   resumable sweeps, write per-item outputs idempotently so a resume skips done work.
 - `cmd | head` under `set -o pipefail` can SIGPIPE-kill the job — use
@@ -181,14 +198,45 @@ the work         → $PYTHON code/<script>.py --args ...
   different — delete or replace it.** It's the clearest example of a Customization
   Point that is model-specific, not cluster-specific.
 
-## 8. Troubleshooting / field-tested failure modes
+- **Record WHY each pin can't move.** Pins interlock: an inference engine's newer
+  wheels may target a CUDA the driver doesn't have, while the older engine breaks on
+  a newer `transformers` API — so *neither* pin can float, and a "harmless" upgrade
+  of one bricks the other. A one-line comment per pin ("cuda/12.3 because torch X
+  wheels", "engine Y because driver Z") turns a future debugging session into a read.
+- **New model on a pinned engine? Check the engine's model registry FIRST** — before
+  designing any experiment around the model. A serving engine given an architecture
+  it doesn't support may silently fall back to a related implementation and die deep
+  inside its own startup profiling with a misleading shape error (cost: an hour of
+  confusion, minimum). One import of the engine's model registry on a compute node
+  answers it in seconds.
+
+## 8. Data movement (laptop ↔ cluster)
+
+Autonomous loops shuttle code up and results down constantly. Three rules, each paid
+for in a near-disaster or a false alarm:
+
+- **Never sync by deletion.** `rsync --delete` once came within a prompt of erasing
+  the cluster-side scripts that were the provenance for published numbers. The trees
+  legitimately diverge in BOTH directions, so pick the authority per artifact class:
+  **the cluster is authoritative for anything a cluster run produced** (result JSONs,
+  receipts, acquisition scripts of record); **local is authoritative for source**.
+  Sync additively in each direction; delete manually, deliberately, never as a flag.
+- **Always exclude the junk:** `--exclude '.venv*' --exclude '__pycache__'
+  --exclude '.git'` — one stray local venv once swept 3,000+ files into a transfer.
+- **Verify what matters.** For any artifact a downstream number depends on, record an
+  md5 at the source and check it after transfer (`long-job-patterns.md` §6 stamps
+  them into result files for exactly this reason). scp races on files still being
+  written are a known infrastructure failure — copy from checkpoints or after the
+  job's terminal state, not from a live output file.
+
+## 9. Troubleshooting / field-tested failure modes
 
 These are the failure modes the skill hit on its first real end-to-end run. Each is
 named so you can match a symptom to a recovery without re-deriving it, and each notes
 whether it is an **agent-code** bug (counts toward the G5 failure streak) or an
 **infrastructure** failure (does **not** count — see `autonomy-model.md` §G5).
 
-### 8.1 Connection auth fails or prompts unexpectedly (L1)
+### 9.1 Connection auth fails or prompts unexpectedly (L1)
 See §1 for the full mechanics. The two field-tested checks, in order:
 1. **Probe with `BatchMode` via the ALIAS first** — key auth often clears with no Duo
    prompt and opens the persistent master socket in the same call. Interactive MFA is
@@ -199,14 +247,14 @@ See §1 for the full mechanics. The two field-tested checks, in order:
 
 Infrastructure, not agent code — a failed connect never increments the G5 streak.
 
-### 8.2 Smoke gate (G1): smoke via `sbatch`, not only `srun` (L2)
+### 9.2 Smoke gate (G1): smoke via `sbatch`, not only `srun` (L2)
 **Symptom you want to avoid:** a job passes an interactive `srun` smoke and then **dies
 at launch** the moment it's submitted as a real `sbatch`.
 
 **Why `srun` alone is insufficient:** an interactive `srun` smoke streams stdout back
 over your SSH session and writes **no `--output` file**. So it exercises neither
 output-file creation nor the full `sbatch` node prolog/launch path — exactly the steps
-that produce the launch failures in §8.3. A job can be green under `srun` and dead under
+that produce the launch failures in §9.3. A job can be green under `srun` and dead under
 `sbatch`.
 
 **Rule:** the **G1** smoke gate must validate the **actual artifact you will submit**.
@@ -214,7 +262,7 @@ Include at least one real `sbatch` submission (tiny inputs, `gpu-short`, short `
 that writes to a real `--output` path — not only an `srun` stream. This is the cheap
 form of the end-to-end wiring check, applied to the launch path itself.
 
-### 8.3 Node launch-kill — sbatch dies in seconds with no log (L3)
+### 9.3 Node launch-kill — sbatch dies in seconds with no log (L3)
 A named, recurring **infrastructure** failure. Do **not** "fix" your code for it; if you
 treat it as an agent-code bug you both waste time and wrongly increment the **G5**
 streak.
@@ -256,7 +304,7 @@ escalate rather than excluding the whole partition.
 
 **G5 classification:** infrastructure. Does **not** count toward the failure streak.
 
-### 8.4 Walltime / partition sizing + short-partition timeout recovery (L4)
+### 9.4 Walltime / partition sizing + short-partition timeout recovery (L4)
 **(a) A short-walltime partition can TIMEOUT a job that actually finished its real
 work** but ran out of clock during the final aggregation/write step. Defend against
 this *before* it happens and recover cheaply *after*:
@@ -270,7 +318,7 @@ this *before* it happens and recover cheaply *after*:
 **(b) "Idle" does not mean "available" on a short partition.** A `gpu-short`-style
 partition often shares physical nodes with the main `gpu` partition, and free slots can
 be **reserved for higher-priority partitions** — so even a tiny job **pends** or gets
-**launch-killed** (§8.3) despite the node looking idle. Before assuming availability,
+**launch-killed** (§9.3) despite the node looking idle. Before assuming availability,
 check:
 ```bash
 ssh <alias> 'scontrol show reservations'
@@ -280,14 +328,14 @@ ssh <alias> 'scontrol show config | grep -i preempt'   # PreemptMode
 **(c) Size `--time` from the smoke, and don't undercut it.** Shorter walltime backfills
 faster and schedules sooner, but estimate the real runtime from the **per-item time
 measured in the G1 smoke** × item count, plus margin for load/aggregation. Undercutting
-that estimate just buys you a §8.4(a) timeout.
+that estimate just buys you a §9.4(a) timeout.
 
 **G5 classification:** a walltime-timeout of code that did its real work, and
 partition-contention pends/launch-kills, are **infrastructure** — they do **not** count
 toward the failure streak.
 
-### 8.5 What counts as a G5 streak failure (L5 — reinforced)
-The failure modes in §8.1, §8.3, and §8.4 — **connection auth failures, node
+### 9.5 What counts as a G5 streak failure (L5 — reinforced)
+The failure modes in §9.1, §9.3, and §9.4 — **connection auth failures, node
 launch-kills, walltime-timeouts of working code, and partition contention** — are
 **infrastructure**, not agent-code bugs. They must **not** increment the G5
 consecutive-failure streak (`.failure_streak.json`). Record each explicitly with

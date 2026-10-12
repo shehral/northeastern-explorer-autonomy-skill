@@ -15,7 +15,7 @@ description: >-
   and connection mechanics in here prevent the expensive footguns (silent meta-init
   model collapse, runaway H200 spend, bug-loops) that ad-hoc cluster use hits.
 metadata:
-  version: 1.0.0
+  version: 1.2.0
   tags: [hpc, slurm, explorer, northeastern, autonomy, h200, heartbeat, guardrails]
 ---
 
@@ -96,12 +96,14 @@ guardrails are portable; only the connection/env/partition details change.
 2. **Pre-cache the model on the LOGIN node** (compute nodes are offline — see G-rule
    below). `references/cluster-setup.md` §2. Never load the model on the login node
    itself; it has a ~8 GB effective RAM cap and will OOM-kill you.
-3. **Smoke-test the experiment on `gpu-short`** for ~60s on one input **before** any
-   `gpu` submission (Guardrail G1; ~5000:1 cost asymmetry). Validate the **actual
-   artifact you'll submit**: include at least one real `sbatch` smoke, not only an
-   interactive `srun` — `srun` streams stdout over SSH and writes no output file, so it
-   silently skips the failures (output-file creation, node prolog/launch) that only
-   appear under `sbatch`.
+3. **Smoke-test the experiment locally or on `gpu-short`** for ~60s on one input
+   **before** any `gpu` submission (Guardrail G1; ~5000:1 cost asymmetry). Validate the
+   **actual artifact you'll submit**: include at least one real `sbatch` smoke, not only
+   an interactive `srun` — `srun` streams stdout over SSH and writes no output file, so
+   it silently skips the failures (output-file creation, node prolog/launch) that only
+   appear under `sbatch`. For anything expected to run more than a few GPU-hours, shape
+   it with `references/long-job-patterns.md` first — interleaved shards, resumable
+   checkpoints, and a saturation check routinely halve real spend.
 4. **Compose the sbatch from `assets/job_template.sbatch`** — it already encodes the
    pinned modules, the PATH-export env activation, mandatory offline flags, cache
    paths, determinism, a pre-flight model-cache check, and a SIGTERM save-hook.
@@ -225,14 +227,22 @@ integrated promptly without polling, and the loop survives even if one mechanism
 ## Reference files (read the one you need)
 
 - `references/cluster-setup.md` — connection, allocation/storage, env activation,
-  offline rules, the canonical sbatch anatomy, and model-loader gotchas. **Read first
+  offline rules, the canonical sbatch anatomy, model-loader gotchas, and the
+  laptop↔cluster data-movement rules (never sync by deletion). **Read first
   when setting up a session or writing a new job.**
-- `references/autonomy-model.md` — T0–T3 tiers, G1–G5 guardrails, and the
+- `references/autonomy-model.md` — T0–T3 tiers, G1–G5 guardrails, the
+  sacct-signature failure-triage table (agent-code vs infrastructure), and the
   `.compute_budget.json` / `.failure_streak.json` ledger shapes + semantics.
 - `references/heartbeat-loop.md` — the tick protocol, cron / `/loop` / `/schedule`,
   persistent-Monitor wiring, and how they compose into hands-off overnight runs.
 - `references/safety-hooks.md` — PreToolUse hook wiring and the per-job verifier
   pattern (with the reusable `_lib.sh` helper set).
+- `references/long-job-patterns.md` — field-tested patterns for multi-day GPU
+  campaigns: interleaved sharding with certified
+  merges, resumable/idempotent shard jobs, budget estimation from a smoke shard,
+  memory-adaptive batching, saturation-before-spending, artifact stamping,
+  fp16-store/fp32-load, and the generalized loader trust check. **Read before
+  designing any fit or sweep expected to exceed a few GPU-hours.**
 
 ## Bundled assets
 

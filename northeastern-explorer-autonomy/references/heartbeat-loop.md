@@ -106,6 +106,34 @@ integrated promptly **and** the loop survives if one mechanism dies — if the M
 is lost, the next heartbeat still catches the completed job via `sacct`. That
 redundancy is the point.
 
+## The overnight auth reality (plan around it, don't fight it)
+
+The ControlMaster window (~8h) and Duo both expire without a human, and a headless
+session **cannot re-clear Duo**. So a true overnight run should be planned as:
+
+1. **Front-load** the submissions while auth is warm — get every guardrail-passing
+   job into the queue *before* sleep; the jobs run server-side and need nothing from
+   your session.
+2. **Expect a read-only gap.** When the socket dies mid-night, `BatchMode` probes
+   start failing — the tick should detect this, log it, **queue** its intended
+   actions locally, and keep re-anchoring from local state instead of retrying SSH
+   blindly (each retry is a wasted tool call against a dead socket).
+3. **Morning recovery is the human's first act:** re-`ssh`, clear Duo, then run the
+   stalled-session recovery below — the queued actions and `sacct` catch-up drain in
+   one tick.
+
+## Local-side (laptop) gotchas that fake a stall
+
+Two macOS traps have produced false "no progress overnight" alarms — check these
+before declaring work dead:
+
+- **BSD `find` rejects `-newermt` with relative times by returning nothing** instead
+  of erroring — "no files modified since X" may mean your predicate was silently
+  invalid, not that nothing ran. Prefer `ls -lt | head` or GNU find, and treat an
+  *empty* result from a freshness probe as "verify the probe" first.
+- **No `timeout(1)` on stock macOS**, and `python3` can resolve to a stray venv —
+  pin absolute paths for anything a tick runs locally.
+
 ## Recovering a stalled session
 
 If the session died overnight and jobs are orphaned but still running on the cluster:

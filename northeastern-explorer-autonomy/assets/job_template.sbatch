@@ -49,6 +49,13 @@ export TRANSFORMERS_OFFLINE=1
 # --- Deterministic cuBLAS ---------------------------------------------------
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 
+# --- Long-fit hygiene (see long-job-patterns.md) -----------------------------
+# expandable_segments prevents fragmentation OOM on multi-hour fits with
+# many transient allocations; progress bars off keeps captured logs readable
+# (a single scripted HF transfer can otherwise dump ~1 MB of \r-bars).
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export HF_HUB_DISABLE_PROGRESS_BARS=1
+
 # --- Sanity: GPU + torch ----------------------------------------------------
 nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv 2>&1 | head -5 || true
 $PYTHON -c "import torch; assert torch.cuda.is_available(); print('torch', torch.__version__, torch.cuda.get_device_name(0))"
