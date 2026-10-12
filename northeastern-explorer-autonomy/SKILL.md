@@ -62,7 +62,7 @@ and never modify its own rules unilaterally.
 Everything below assumes these values. **Replace every `<…>` placeholder with your own
 account's values before first use** — the rest of the skill and the bundled
 `assets/job_template.sbatch` reference them. Values shown without brackets
-(module versions, partitions, proxy) are Explorer-wide and usually correct as-is.
+(module versions, partition names) are Explorer-wide and usually correct as-is.
 
 | Point | Placeholder → set to yours | What it is |
 |---|---|---|
@@ -113,7 +113,7 @@ guardrails are portable; only the connection/env/partition details change.
    that can start soonest given free GPUs and your QOS caps
    (`references/cluster-setup.md` §5.1). Sweeps can split across several free types.
    Compose from `assets/job_template.sbatch` — it already encodes the
-   pinned modules, the PATH-export env activation, mandatory offline flags, cache
+   pinned module, the PATH-export env activation, mandatory offline flags, cache
    paths, determinism, a pre-flight model-cache check, and an early-signal checkpoint hook.
 5. **Verify, then submit.** A PreToolUse hook should run a per-job verifier before the
    `sbatch` lands (see `references/safety-hooks.md`). Submitting fires a job ID.
