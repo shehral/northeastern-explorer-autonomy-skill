@@ -47,12 +47,18 @@ allocations). Write these to a `USER_INPUT_TRACKER.md` OPEN list and wait.
 | **G5** | Failure-streak rollback | Not under auto-rollback: `< FAIL_STREAK_MAX` consecutive **agent-code** failures, per `.failure_streak.json`. | Bug-loops (broken code → fail → broken fix → fail) are the priciest failure mode. |
 
 **G5's classification rule is load-bearing:** only **new agent-written-code bugs**
-increment the streak. **Infrastructure failures do NOT count** — HF API timeout, scp
-race, node OOM, and: Infrastructure, not agent code (does not increment G5): connection/auth failures, node
-launch-kills, NODE_FAIL, a walltime timeout of code whose checkpoints were advancing, and
-pending time. **Counts as agent code:** an IdleBot cancellation of a job the agent
-designed with a long CPU-only phase inside a GPU allocation, because that is a
-job-design bug.
+increment the streak.
+**Infrastructure failures do not count:**
+- HF API timeouts and scp races;
+- connection/auth failures;
+- node launch-kills and NODE_FAIL;
+- a walltime timeout of code whose checkpoints were advancing;
+- pending time.
+
+**Counts as agent code:** an IdleBot cancellation of a job the agent designed with a
+long CPU-only phase inside a GPU allocation, because that is a job-design bug. An OOM
+follows the triage row below.
+
 A launch-kill is fixed with `--exclude` of the bad node; a timeout of working code is
 recovered by re-aggregating CPU-only in `srun -p short` (never on the login node). When
 in doubt, ask: "did my code have a bug, or did the cluster misbehave?" Record the

@@ -202,15 +202,14 @@ The **five guardrails** that gate T1:
 | **G4** | Daily compute budget | under `DAILY_GPU_BUDGET` GPU-h today, recorded per GPU type (`.compute_budget.json`) |
 | **G5** | Failure-streak rollback | not under auto-rollback (`< FAIL_STREAK_MAX` consecutive **agent-code** bugs) |
 
-G5's subtlety: **infrastructure failures don't count** (HF timeout, scp race, a
-walltime-kill of code that was working). Only new agent-written-code bugs increment the
-streak. This prevents bug-loops — the most expensive autonomous failure mode — while
-not punishing the agent for the cluster being flaky. Infrastructure, not agent code (does not increment G5): connection/auth failures, node
-launch-kills, NODE_FAIL, a walltime timeout of code whose checkpoints were advancing, and
-pending time. **Counts as agent code:** an IdleBot cancellation of a job the agent
-designed with a long CPU-only phase inside a GPU allocation, because that is a
-job-design bug. See the field-tested
-gotchas above and `references/autonomy-model.md`.
+G5's subtlety: only new agent-written-code bugs increment the streak. **Infrastructure
+failures don't count:** HF timeouts, scp races, connection/auth failures, node
+launch-kills, NODE_FAIL, a walltime timeout of code whose checkpoints were advancing,
+and pending time. **Counts as agent code:** an IdleBot cancellation of a job the agent
+designed with a long CPU-only phase inside a GPU allocation (a job-design bug). This
+prevents bug-loops — the most expensive autonomous failure mode — while not punishing
+the agent for the cluster being flaky. See the field-tested gotchas above and the
+triage table in `references/autonomy-model.md`.
 
 ## The safety layer (make the verified path the only path)
 

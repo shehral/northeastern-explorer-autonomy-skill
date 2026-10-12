@@ -557,8 +557,8 @@ pending time. **Counts as agent code:** an IdleBot cancellation of a job the age
 designed with a long CPU-only phase inside a GPU allocation, because that is a
 job-design bug.
 
-They must **not** increment the G5 consecutive-failure streak (`.failure_streak.json`). Record each explicitly with
-`counted_in_streak: false`. Only a genuinely new bug in agent-written code (e.g. an OOM
+Infrastructure failures must **not** increment the G5 consecutive-failure streak
+(`.failure_streak.json`). Record each explicitly with `counted_in_streak: false`. Only a genuinely new bug in agent-written code (e.g. an OOM
 you introduced in preprocessing, a wrong wrapper, a logic error) increments the streak.
 When in doubt, ask: *"did my code have a bug, or did the cluster misbehave?"* See
 `autonomy-model.md` §G5 for the canonical rule and ledger shape.
