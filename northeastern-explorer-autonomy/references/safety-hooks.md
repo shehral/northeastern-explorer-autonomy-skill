@@ -80,6 +80,11 @@ Synthesized across real verifiers — adapt the domain-specific ones:
 5. **Norm-matched controls (where applicable)** — if you use an inverse/random control,
    verify its vector norm is within ~10% of the real perturbation, so a "control
    perturbs more" result isn't just norm-shock.
+6. **The scheduler accepts it.** `sbatch --test-only <same flags> <file>` succeeds. This
+   catches a wrong account, partition, gres type or time before a slot or a dependency
+   chain is spent. Do not use its start estimate to choose a GPU type
+   (`cluster-setup.md` §5.1 step 5). It is unverified whether it rejects a request over
+   the per-job GPU cap, so check that cap (§5) yourself.
 
 ### Degrade gracefully, never block on missing infrastructure
 A verifier run on a dev box (no GPU, no smoke fixture) should fall back to **static
