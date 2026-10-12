@@ -17,7 +17,7 @@ description: >-
   and connection mechanics in here prevent the expensive footguns (silent meta-init
   model collapse, runaway GPU spend, bug-loops) that ad-hoc cluster use hits.
 metadata:
-  version: 1.2.0
+  version: 2.0.0
   tags: [hpc, slurm, explorer, northeastern, autonomy, gpu-selection, heartbeat, guardrails]
 ---
 
