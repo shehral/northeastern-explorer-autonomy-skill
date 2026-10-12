@@ -60,6 +60,9 @@ Every `ssh`/`scp`/`rsync` goes through `<alias>`.
 cap** (whatever `free` reports — the per-user cap is what bites) and will SIGKILL
 (`exit 137`) heavy work. **Never** load the model, run a big `du`, or do real compute
 there. Delegate to a compute node with `srun`/`sbatch`, including pre-caching (§2).
+There is no `nvidia-smi` on the login node, so GPU checks belong in a job. Large single
+transfers through the login node have also been killed silently: move big files one at
+a time and check their md5 (§8).
 
 **The kill is SILENT — know the signature.** A login-node SIGKILL often produces
 **no output at all**: no traceback, no "Killed" line, just a command that ran and
@@ -431,6 +434,11 @@ for in a near-disaster or a false alarm:
   "Connection closed"; `ssh <alias> 'tar cf - -C <dir> <files>' | tar xf -` works.
 - **Never check out a different commit in a cluster tree** while any job from that tree
   is running or pending; the job reads whatever code is there when it starts.
+- **Stamp the commit when the job starts,** not when it ends: an end-of-job stamp reads
+  whatever tree is there by then. To deploy new code while jobs run, use a second
+  checkout. If that checkout shares data or results with the first by symlink, run
+  `readlink` on them after every checkout, because `git checkout -f` turns tracked paths
+  back into real files.
 
 ## 9. Troubleshooting / field-tested failure modes
 
@@ -507,6 +515,11 @@ cause; re-check if that changes.
 (`<bad-nodes>` = the `NodeList` from step (a), comma-separated.) If the canary in (b)
 also fails on a fresh node, the cause is systemic (step (c)), not a single bad node —
 escalate rather than excluding the whole partition.
+
+Keep **one** exclude list for all your projects (for example
+`~/.config/explorer/exclude_nodes`, one node per line with date and reason) and submit
+with `--exclude=$(paste -sd, <file>)`. Re-run the canary on an entry before relying on it
+again: excluded nodes get repaired, and an outdated list shrinks your pool.
 
 **G5 classification:** infrastructure. Does **not** count toward the failure streak.
 
