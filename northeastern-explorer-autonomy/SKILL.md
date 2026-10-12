@@ -125,8 +125,10 @@ guardrails are portable; only the connection/env/partition details change.
 7. **On wakeup, intake the result**, update your state ledgers, record success/failure
    in the failure streak, and let the decision loop pick the next action.
 8. **If running unattended,** keep the loop alive with `/loop 30m ...` (self-paced) or
-   a `CronCreate` cadence, or `/schedule` for a durable cloud agent. Use a 1200–1800s
-   interval, **never 300s** (cache-window thrash). See `references/heartbeat-loop.md`.
+   a `CronCreate` cadence, or a Desktop scheduled task for a durable local tick (cloud
+   `/schedule` routines cannot reach the cluster); re-arm session loops before their
+   7-day expiry. Use a 1200–1800s interval, **never 300s** (cache-window thrash). See
+   `references/heartbeat-loop.md`.
 
 ## The one rule that prevents the most expensive failure
 
@@ -233,8 +235,9 @@ bounded (**≤25 tool calls, ≤300-word report**) and walks a fixed step sequen
 re-anchor state → audit consistency → check for landed jobs → integrate results →
 update tournament/claims → run guardrail checks → maybe submit the next job → log →
 emit report → **reschedule itself**. Full step list, cron setup, the `/loop` /
-`CronCreate` / `/schedule` mechanisms, durability caveats, and the cache-window delay
-rule are in `references/heartbeat-loop.md`.
+`CronCreate` / Desktop-task mechanisms, durability caveats (7-day expiry; Monitor tasks
+are not restored on resume), and the cache-window delay rule are in
+`references/heartbeat-loop.md`.
 
 Compose it with the Monitor: **cron-fired heartbeat** (periodic, broad) + **persistent
 Monitor** (event-driven, fires ~1 min after a job hits a terminal state) = jobs get
@@ -249,7 +252,7 @@ integrated promptly without polling, and the loop survives even if one mechanism
 - `references/autonomy-model.md` — T0–T3 tiers, G1–G5 guardrails, the
   sacct-signature failure-triage table (agent-code vs infrastructure), and the
   `.compute_budget.json` / `.failure_streak.json` ledger shapes + semantics.
-- `references/heartbeat-loop.md` — the tick protocol, cron / `/loop` / `/schedule`,
+- `references/heartbeat-loop.md` — the tick protocol, cron / `/loop` / Desktop tasks,
   persistent-Monitor wiring, and how they compose into hands-off overnight runs.
 - `references/safety-hooks.md` — PreToolUse hook wiring and the per-job verifier
   pattern (with the reusable `_lib.sh` helper set).

@@ -41,6 +41,10 @@ the *shape* is what's portable):
 8. **Report & reschedule.** Emit the ≤300-word report, then **reschedule the next
    tick** (below). The reschedule call is what makes the loop self-sustaining.
 
+With a persistent Monitor on every running job, the tick is a backstop. If nothing
+changed since the last tick, log one line and reschedule within a few tool calls. A
+30-min recurring task may also start up to 15 min late (scheduler jitter).
+
 Cadence-based deeper actions (optional, project-specific): every Nth tick, spawn a
 critic/rigor subagent to audit the last few ticks for overclaim, run a literature scan,
 or close out an epoch. A small `.tick_counter.json` makes these fire on a modulo and
@@ -53,14 +57,19 @@ stays idempotent if a tick re-runs after a crash.
 | `/loop <prompt>` (no interval, self-paced) | Let the model self-pace each iteration; it picks the delay per the cache-window rule below and repeats the tick. | Session-only (ends with the session). |
 | `/loop 30m <prompt>` (fixed interval) | Interval-driven recurring task in an active session; good fallback to re-arm after a session break. | Session-only. |
 | `CronCreate(cron, prompt, recurring=True)` | Fixed wall-clock cadence (e.g. `7,37 * * * *`). Offset minutes (`:07`/`:37`, not `:00`/`:30`) to avoid thundering-herd collisions. | Session-only unless `durable: true`. |
-| `/schedule` skill | **Cross-session / cloud-resident** recurring agents that survive the session closing. The real answer for "keep running after I close my laptop." | Durable (cloud). |
+| Desktop scheduled task | A durable local tick with your files and SSH config. It needs the machine on, and key auth with no MFA (see "overnight auth"). | Durable (local). |
+| `/schedule` (cloud routine) | Cluster-free work only. A routine runs in a fresh cloud clone with no local files and cannot use your SSH key or clear Duo, so it cannot reach Explorer. | Durable (cloud). |
 
-**Durability caveat:** `CronCreate` defaults to session-only. Even with `durable: true`
-the UI has been observed to report "Session-only" — verify with
-`cat ~/.claude/scheduled_tasks.json`. For genuinely unattended multi-day operation,
-prefer the `/schedule` skill (cloud remote agents). Note that any scheduled remote run
-must be able to re-establish the SSH/ControlMaster session and clear Duo — a headless
-run that can't authenticate to Explorer will stall at step 3.
+**Durability caveat.** Recurring `/loop` and `CronCreate` tasks expire **7 days** after
+creation. A self-paced `/loop`, Monitor tasks and background Bash tasks are **not
+restored** on `--resume`. So **step 0 of every tick** is:
+1. Run `CronList`.
+2. If the heartbeat is missing or more than 6 days old, delete and re-create it.
+3. Re-arm a Monitor for every running job.
+
+Keep the tick prompt in a tracked `.claude/loop.md` (bare `/loop` uses it). Checked
+against the Claude Code scheduled-tasks docs, 2026-10; this is version-dependent, so
+re-check.
 
 ## The cache-window delay rule (don't pick 300s)
 
@@ -133,8 +142,8 @@ submissions and expect a read-only gap. In that case plan the night as:
 
 ## Local-side (laptop) gotchas that fake a stall
 
-Two macOS traps have produced false "no progress overnight" alarms — check these
-before declaring work dead:
+These macOS traps have produced false "no progress overnight" alarms or silently
+wrong local commands — check them before declaring work dead:
 
 - **BSD `find` rejects `-newermt` with relative times by returning nothing** instead
   of erroring — "no files modified since X" may mean your predicate was silently
@@ -142,11 +151,15 @@ before declaring work dead:
   *empty* result from a freshness probe as "verify the probe" first.
 - **No `timeout(1)` on stock macOS**, and `python3` can resolve to a stray venv —
   pin absolute paths for anything a tick runs locally.
+- **zsh, the macOS default shell, does not word-split an unquoted `$var`,** so
+  `for x in $list` or `set -- $cfg` sees one word. Use arrays, or run the snippet under
+  `bash`.
 
 ## Recovering a stalled session
 
 If the session died overnight and jobs are orphaned but still running on the cluster:
 re-connect (`ssh <alias>`, clear Duo if asked), `squeue -u <user>` to see what's alive, read
 the `OVERNIGHT_AUTONOMOUS_FIRES.md` tail and the result dirs to rebuild state, then
-re-arm the loop with `/loop 30m <heartbeat prompt>`. The cluster jobs persist
+re-arm the loop with `/loop 30m <heartbeat prompt>` and a Monitor for every running job
+(neither survives a resume). The cluster jobs persist
 independently of the session; only the watching loop needs rebuilding.
