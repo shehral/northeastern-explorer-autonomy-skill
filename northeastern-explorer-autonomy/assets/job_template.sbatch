@@ -72,6 +72,11 @@ nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv 2>&1 | head -5
 # bf16 from compute capability (>= 8): is_bf16_supported() also says True on T4/V100 (emulation).
 $PYTHON -c "import torch; assert torch.cuda.is_available(); x=torch.ones(1,device='cuda'); assert (x+1).item()==2; print('torch', torch.__version__, torch.cuda.get_device_name(0), torch.cuda.get_device_capability(0), 'bf16' if torch.cuda.get_device_capability(0)[0] >= 8 else 'no-bf16')"
 
+# GPU utilisation every 5 min in the log, so an idle phase shows long before IdleBot's 1 h cancel (cluster-setup.md s5)
+( while sleep 300; do nvidia-smi --query-gpu=index,utilization.gpu,memory.used --format=csv,noheader,nounits | sed "s/^/gpu-util: /"; done ) &
+WATCH=$!
+trap 'kill $WATCH 2>/dev/null' EXIT
+
 # --- Pre-flight gate: the pinned snapshot must be complete in the cache ------
 # A bare folder check passes on a half-downloaded or wrong-revision cache.
 SNAP="$MODEL_DIR_GLOB/snapshots/<revision>"                 # CUSTOMIZE: REVISION (commit sha)

@@ -213,13 +213,18 @@ MaxTRES is the per-job cap, and `scontrol show partition <p>`; re-check, they ch
   project's account.
 - Array tasks count individually toward MaxSubmitPU; `sacct -X` collapses a pending
   array into one row, so count queued tasks with `squeue -u $USER -h -r -o %i`. Stage
-  submissions instead of bulk-submitting into a rejection.
+  submissions instead of bulk-submitting into a rejection. Array ids contain `[ ] % -`,
+  so match them as fixed strings (`awk -F'|' -v j="$id" '$1==j'`, `grep -F`), never as
+  regexes.
 - **IdleBot cancels GPU jobs that sit under-utilised for an hour.** An email arrives at
   about 15 min, and `gpu-logs <jobid>` shows the record. CPU-heavy phases (statistics,
   probe fits, aggregation, data prep) go to `-p short`, never inside a GPU allocation.
-  Log GPU utilisation every few minutes (`nvidia-smi --query-gpu=utilization.gpu,memory.used
-  --format=csv -l 60 > gpu_$SLURM_JOB_ID.csv &`), and check in the smoke that the GPU is
-  busy once loading ends.
+  Log GPU utilisation every few minutes (the template logs `gpu-util:` lines every 5 min),
+  and check in the smoke that the GPU is busy once loading ends. Symptom in `sacct`:
+  `CANCELLED by 0`, with the batch step at exit 15. Policy:
+  rc-docs.northeastern.edu/en/explorer-main/gpus/idlebot.html; `gpu-logs` keeps the
+  record for 7 days. A pipeline with a CPU-heavy middle becomes three jobs: GPU, then CPU
+  on `short`, then GPU, chained with `afterok`.
 - **Job needs more than the 8h cap?** Don't fight the partition — design the job
   resumable (atomic per-item checkpoints, exit-0-if-done; `long-job-patterns.md` §2)
   and **chain it**: resubmit the same sbatch and it continues from checkpoints.
@@ -227,6 +232,15 @@ MaxTRES is the per-job cap, and `scontrol show partition <p>`; re-check, they ch
   `afterok` — a TIMEOUT exits non-zero and `afterok` never fires, §5 below).
 - On TIMEOUT, exit is non-zero and `afterok` deps won't fire (`afternotok` will). For
   resumable sweeps, write per-item outputs idempotently so a resume skips done work.
+- **Dependencies.** Explorer runs with `kill_invalid_depend`, so a job whose dependency
+  can no longer be met is cancelled, not left pending.
+  1. Before you `scancel` a parent, including when rebalancing in §5.1, re-point or
+     clear its children: `scontrol update JobId=<child> Dependency=afterany:<new-id>`
+     (or `Dependency=` to clear).
+  2. A dependency on a job that ended more than a few minutes ago (`MinJobAge`) is
+     rejected with "Job dependency problem". Check `sacct -j <id>` and drop it.
+  3. For two raced siblings, `--dependency=afterok:<a>?afterok:<b>` fires when either
+     one succeeds.
 - `cmd | head` under `set -o pipefail` can SIGPIPE-kill the job — use
   `cmd 2>&1 | head -n N || true`.
 
@@ -275,8 +289,8 @@ every GPU submission:
    across two types gives a cheap cross-hardware check; do not assume bit-identical
    results in general (TF32 or different kernels change them).
 8. **Rebalance your own pending jobs.** If a job still pends after ~15 min while another
-   fitting type shows free GPUs, `scancel` that pending job (your own only) and resubmit
-   it on the free type. Pending time is infrastructure, not a G5 failure.
+   fitting type shows free GPUs, `scancel` that pending job (your own only; re-point its
+   dependents first, §5 Dependencies) and resubmit it on the free type. Pending time is infrastructure, not a G5 failure.
 9. **Record** the chosen type, the alternatives and what you saw for them in the job's
    ledger entry, and log its GPU-hours under that type (G4).
 

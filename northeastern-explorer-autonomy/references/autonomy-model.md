@@ -71,7 +71,7 @@ classification explicitly.
 | Job "succeeded" but with-vs-without outputs are identical | silent no-op — agent code (wiring bug; see the end-to-end check) | yes |
 | `NODE_FAIL`, `CANCELLED` by admin, HF 5xx during pre-cache | infrastructure | no |
 | `FAILED` in 1-5 s, `.batch` `CANCELLED`, signal ExitCode, no log | node launch-kill (`cluster-setup.md` §9.3) — infrastructure | no |
-| `CANCELLED` by IdleBot (email; `gpu-logs <id>`) | CPU phase inside a GPU job — agent design | yes |
+| `CANCELLED by 0`, batch exit 15, after about 1 h of low GPU use (IdleBot email; `gpu-logs <id>`) | CPU phase inside a GPU job — agent design | yes |
 | `FAILED` at the first CUDA op with `no kernel image is available` | env lacks this GPU's arch — route to a supported type (`cluster-setup.md` §5.1); agent code | yes |
 
 ## Supporting safety rules (the load-bearing few)
