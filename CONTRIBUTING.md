@@ -28,7 +28,7 @@ The benchmark idea, at a high level:
 
 - **With-skill run:** answer each eval prompt in a session that has the skill loaded.
 - **Baseline run:** answer the same prompts with no skill loaded.
-- Compare both against each prompt's `expected_output`. A good change should hold or improve the with-skill answers (correct offline-mode setup, the budget and fail-streak guardrails, the persistent-Monitor wiring, the end-to-end wiring no-op check) while keeping a clear lift over baseline.
+- Compare both against each prompt's `expected_output`. A good change should hold or improve the with-skill answers (correct offline-mode setup, the budget and fail-streak guardrails, the background sacct wait (one wake per terminal state; Monitor only for streams), the end-to-end wiring no-op check) while keeping a clear lift over baseline.
 
 If your change adds or alters a behavior, add or update an eval so the new behavior is covered. Keep eval prompts realistic and free of any private values (same placeholder rule applies).
 

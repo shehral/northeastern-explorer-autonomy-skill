@@ -1,10 +1,10 @@
 # Long-job patterns for multi-day GPU campaigns
 
 Field-tested on Explorer during a multi-day, backprop-heavy fitting campaign
-whose numbers later survived an adversarial publication audit. Each pattern below
-earned its place
-by saving real money or catching a real error. They compose: sharding gives you
-resumability *and* a free validation instrument; stamping gives you provenance
+whose numbers later survived an adversarial publication audit, plus failures
+observed across several projects in 2026-10 (dated where they appear). Each
+pattern earned its place by saving real money or catching a real error. They
+compose: sharding gives you resumability *and* a free validation instrument; stamping gives you provenance
 *and* an audit trail.
 
 ## 1. Interleaved sharding, not chunked
@@ -24,23 +24,93 @@ merge**: compare merged-vs-single-shard outputs on a held-out probe set and
 record the agreement. If merged ≈ shard, the merge is sound and you have the
 receipt.
 
+**Array index maps are per stage.** If two pipeline stages order their units
+differently, submitting stage B with stage A's indices computes the wrong units,
+and some tasks die on missing inputs (field-observed 2026-10). Before each array
+submission, print the index-to-unit map from the manifest the job will read and
+check it against the units you intend.
+
 ## 2. Resumable + idempotent shard jobs (kill/resubmit freely)
 
 Each shard job:
 - writes an **atomic per-item checkpoint** (write temp file, `mv` into place)
   after every item, so a walltime kill costs at most one item;
-- **exits 0 immediately if its final artifact exists** — resubmission of an
-  already-done shard is a no-op.
+- **exits 0 immediately if its final artifact exists and is complete** —
+  resubmission of an already-done shard is a no-op;
+- **checks completeness before its own exit 0**: the expected row count, and no
+  `.partial` left behind;
+- **exits 75, not 0, when it stops early** on the wall signal or the stop file after
+  writing a checkpoint. An early exit 0 reads as done: `kill_invalid_depend` cancels
+  the `afternotok` insurance chunk, and an `afterok` successor starts on partial work. The
+  full exit-code contract is in the header of `assets/job_template.sbatch`.
 
 This turns SLURM's failure modes (walltime kills, preemption, node flake) from
 disasters into noise: the recovery procedure for *anything* is "resubmit the
 same array," which an autonomous heartbeat can do safely without diagnosis.
 This is the job-level twin of the heartbeat's tick idempotence.
 
-## 3. Budget estimates (for G4 planning)
+**Smoke outputs need their own roots.** "Exit 0 if the final artifact exists"
+turns a smoke that wrote into the full run's path into a silent no-op: the full
+job sees a file and skips all the work. Give smokes separate output roots and
+run ids (`*_smoke/`), and never pass `--limit`/`--smoke` toward a final output
+path. A job that would overwrite rather than resume (one final output, not
+per-item shards) refuses to start when that output exists unless `FORCE=1`.
+(Recorded as a design rule after review; not yet observed as a failure.)
 
-**Estimate from a smoke-tested single shard, multiply, add 20%.** On one
-backprop-heavy fp32 workload, A100-80GB took about 2× the H200 per-shard time.
+```bash
+OUT=$PROJ/results/$RUN_ID/rows.jsonl            # a smoke uses RUN_ID=<name>_smoke
+if [ -e "$OUT" ] && [ "${FORCE:-0}" != 1 ]; then echo "REFUSE: $OUT exists (FORCE=1 redoes it)"; exit 2; fi
+# ... work ...
+n=$(wc -l < "$OUT")
+[ "$n" -eq "$EXPECTED_ROWS" ] || { echo "FATAL: $n rows, expected $EXPECTED_ROWS"; exit 3; }
+if [ -n "$(find "$(dirname "$OUT")" -name '*.partial' -print -quit)" ]; then echo "FATAL: .partial left"; exit 3; fi
+```
+
+Exit 2 is a pre-flight refusal and 3 a failed self-check (template contract). Not
+`find ... | grep -q .`: under `pipefail`, `grep -q` exits on the first match, `find`
+dies of SIGPIPE, and the `if` takes the "no partial" branch (tested locally: 3000
+`.partial` files went undetected in 5 of 5 runs).
+
+### 2.1 Required outputs first, optional phases last
+
+Three CPU statistics jobs finished their required results within 40 min, then
+TIMED OUT in an unbounded exploratory step before writing anything, so the
+results were lost three times (field-observed 2026-10). Write and flush every
+required artifact first. Put optional or open-ended analysis after it, behind a
+skip flag and its own time budget. An agent-chosen wall too short for a
+non-resumable job is agent code in G5 (`autonomy-model.md`).
+
+## 3. Budget estimates (for G4 planning and `--time`)
+
+**Fit the wall from the smoke's max per-item time (not the median) × items,
+plus fixed start-up, × 1.25.** Smoke per-item rates usually overstate time
+(field-observed 2026-10), so they are a safe upper bound for `--time` and
+pessimistic for G4:
+
+- Smokes include start-up: a training smoke ran at 11-16k tokens/s against 29k
+  in full runs.
+- Small batches understate engine throughput: a timing smoke measured about
+  8 s per item, while the full vLLM run averaged about 1.2 s, because the
+  engine batches more on a large set.
+
+Start-up itself does not follow that rule: a warm-cache re-smoke started in
+under 2 min where the cold load had taken 19 min, so a warm smoke can understate
+a cold full run by 10+ min. Add the cold-load figure separately
+(`cluster-setup.md` §7 Serving engines in jobs). Projections resting on 1-3 timed
+calls are thin. Choose
+`gpu-short` only when the projection fits its 2 h. Split any job projected
+above about 6 h of the 8 h `gpu` wall into resumable pieces (§2).
+
+CPU-only fits deserve a per-cell timing smoke too: one fit ran at about 12 min
+per cell on `short` (8 CPUs) against about 4 min for the whole fit on a laptop.
+Thread settings are a suspect, not a confirmed cause, so pin them to the
+allocation and measure:
+
+```bash
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK OPENBLAS_NUM_THREADS=$SLURM_CPUS_PER_TASK MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
+```
+
+**GPU-type ratios.** On one backprop-heavy fp32 workload, A100-80GB took about 2× the H200 per-shard time.
 Measure your own ratio. The ratio matters when H200s are queued out: there is no
 separate A100 partition (the GPU type is a gres on the shared GPU partitions), so
 pick the type with the procedure in `cluster-setup.md` §5.1. A slower type that
@@ -113,3 +183,17 @@ init. After any nonstandard load path, assert an invariant that only the real
 weights satisfy — for a tied head, `cos(lm_head, embed_tokens) > 0.999` — and
 fail the job on violation. A wrong head produces plausible-looking garbage
 that no downstream metric will flag for you.
+
+## 10. Batch-and-replay instead of a live server
+
+When a local tool drives a model, don't keep an engine waiting on a slow laptop
+client: that idles the GPU and invites IdleBot (`cluster-setup.md` §5). Export
+every prompt as JSONL keyed by a stable recording key, run one offline batch job
+that writes key-to-answer JSONL, and replay the answers locally, failing on any
+missing key. GPU utilisation stays high and cluster runs match local settings
+byte for byte. Engine start-up, ports and memory share are in
+`cluster-setup.md` §7 Serving engines in jobs.
+
+If JS logic must run inside a GPU job, `module load nodejs/v22.11.0` was
+available (field-observed 2026-10; Node 22, not newer), so bundle the code for
+node22 and check `node --version` before loading the model.

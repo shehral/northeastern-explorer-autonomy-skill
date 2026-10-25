@@ -1,5 +1,5 @@
 {
-  "_doc": "G4 daily GPU-hour budget ledger, recorded per GPU type. Keyed by local date (pick ONE timezone; it defines the midnight reset boundary). gpu_hours = elapsed_hours x n_gpus; gpu_hours_used and gpu_hours_by_type are the sums over the day's jobs. soft_cap_gpu_hours_per_day covers all types; soft_cap_by_type is optional. The decision loop reads remaining-today before any T1 submit; pause T1 when it goes negative. Write atomically (tmp + rename), stdlib-only.",
+  "_doc": "G4 daily GPU-hour budget ledger, recorded per GPU type. Keyed by local date (pick ONE timezone; it defines the midnight reset boundary; sacct prints US/Eastern, so label the clock of every timestamp and take it from a date call, never an estimate). Keep one ledger of record with one writer, fed from sacct as well as the submit path, so hand-submitted jobs, jobs cancelled while pending (0 GPU-h), array tasks and every run of a requeued job are booked: key rows by (JobIDRaw, Start) and store Start as started_at, because sacct -D lists each requeued run under the same JobIDRaw. gpu_hours = elapsed_hours x n_gpus; gpu_hours_used and gpu_hours_by_type are the sums over the day's jobs. soft_cap_gpu_hours_per_day covers all types; soft_cap_by_type is optional; a cap near the per-user QOS ceiling is only a runaway guard. The decision loop reads remaining-today before any T1 submit; pause T1 when it goes negative. Write atomically (tmp + rename), stdlib-only.",
   "soft_cap_gpu_hours_per_day": 24.0,
   "soft_cap_by_type": {},
   "by_day": {
@@ -15,11 +15,12 @@
           "elapsed_hours": 0.0,
           "gpu_hours": 0.0,
           "state": "COMPLETED",
-          "submitted_at": "2026-01-01T00:00:00-08:00"
+          "submitted_at": "2026-01-01T00:00:00-05:00",
+          "started_at": "2026-01-01T00:02:00-05:00"
         }
       ]
     }
   },
-  "_last_updated": "2026-01-01T00:00:00-08:00",
+  "_last_updated": "2026-01-01T00:00:00-05:00",
   "_format_version": 2
 }
