@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "field_log.schema.json",
+  "title": "Explorer skill field-log entry",
+  "description": "One line of a project's private field log (default .explorer_field_log.jsonl, gitignored or in a private repo). Append one entry whenever the cluster or the harness disagrees with or adds to the skill. Evidence and project_tag stay private; only a sanitized, generalized lesson ever reaches the public skill (references/evolution.md).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["date", "project_tag", "category", "observation", "evidence", "confirmation", "generalizes"],
+  "properties": {
+    "date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9]{2}:[0-9]{2}(:[0-9]{2})?([+-][0-9]{2}:?[0-9]{2}|Z)?)?$",
+      "description": "From a date call, never an estimate: YYYY-MM-DD, optionally with a time and offset."
+    },
+    "project_tag": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Free text naming the project or session. Private: never copied into the skill."
+    },
+    "category": {
+      "type": "string",
+      "enum": ["driver", "node", "queue", "partition", "submission", "signal", "storage", "transfer", "environment", "loader", "serving", "triage", "harness", "skill-error", "other"],
+      "description": "skill-error = an instruction or snippet in the skill was wrong; triage = a failure no triage row matched; harness = a tool behaved differently from the harness assumptions table."
+    },
+    "observation": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What happened, in one or two plain sentences."
+    },
+    "evidence": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Where it shows: job id and sacct line, log line, NODE_DRIVER line, tool schema text. Private."
+    },
+    "confirmation": {
+      "type": "string",
+      "enum": ["observed", "probed", "inferred"],
+      "description": "observed = seen in a real run; probed = a deliberate test or probe job; inferred = reasoning, not yet tested."
+    },
+    "generalizes": {
+      "type": "boolean",
+      "description": "True if it would hold for other users or projects on the cluster, not only this one."
+    },
+    "skill_ref": {
+      "type": ["string", "null"],
+      "description": "The skill file and section it concerns, if any, e.g. references/cluster-setup.md section 3."
+    },
+    "proposed_change": {
+      "type": ["string", "null"],
+      "description": "Optional suggested wording or fix for the skill."
+    }
+  }
+}

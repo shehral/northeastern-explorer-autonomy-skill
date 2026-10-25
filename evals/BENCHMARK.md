@@ -43,8 +43,14 @@ expectations. Version 2.0.0 corrected several of those expectations (GPU jobs of
 with a CPU-job pre-cache and the inherited proxy unset, a Monitor that polls `sacct`,
 a per-job GPU type, dtype from compute capability, Desktop scheduled tasks rather than
 cloud routines for a durable tick), so the numbers above describe the old skill and the
-old checklists. The fourth, fifth and sixth scenarios have never been graded. Re-run
-both configs on all six prompts and refill the table.
+old checklists. Version 2.1.0 changed more: a background `sacct` wait replaces the
+persistent Monitor (the harness has no `persistent` flag), the fallback heartbeat's
+delay is chosen by what it waits for (the "never 300 s" rule is obsolete given the
+1-hour prompt cache the 2.1.296 ScheduleWakeup schema reports; re-check in your
+build), CPU jobs go through `sbatch` on `sharing` or `short`, the CUDA 13 compat
+libcuda loads only where the node's driver needs it, and stopped jobs exit 75. The fourth, fifth and sixth
+scenarios have never been graded. Re-run both configs on all six prompts and refill the
+table.
 
 The fourth (first-real-run) and sixth (pending forever + resume) scenarios should be the
 most discriminating. The baseline has no way to know that a key-auth probe via the
@@ -64,8 +70,10 @@ cluster-specific footguns the skill encodes:
   cause of silent meta-init-zeros and a whole walltime burned on noise.
 - **Pre-cache + force offline** as the paired fix for the same bug (2.0.0 moves the
   pre-cache into a CPU job; the login node kills heavy work).
-- **Persistent Monitor + bounded tick.** The baseline reached for `--dependency`
-  chaining and missed the `persistent: true` rule for >1h jobs and the per-tick caps.
+- **Watching jobs + bounded tick.** The baseline reached for `--dependency`
+  chaining and missed the v1.0 `persistent: true` Monitor rule for >1h jobs and the
+  per-tick caps. (2.1.0 replaces that rule: the harness has no `persistent` flag, and
+  the wait is one background `sacct` until-loop per job.)
 - **Key-auth-via-alias connection.** The skill knows that a non-interactive
   `ssh -o BatchMode=yes <alias>` against an SSH-config block with an authorized
   `IdentityFile` + `ControlMaster`/`ControlPersist` authenticates by key with no MFA
@@ -78,9 +86,10 @@ cluster-specific footguns the skill encodes:
   baseline misreads it as its own bug and burns ticks "fixing" working code (the priciest
   failure mode G5 exists to stop).
 - **Timeout recovery by CPU-job aggregation.** When a short partition times out a job
-  that already finished its real per-item work, the skill re-aggregates CPU-only in an
-  `srun -p short` job from the idempotent per-item outputs instead of re-running on the
-  GPU (1.x said "on the login node"; 2.0.0 corrects that).
+  that already finished its real per-item work, the skill re-aggregates CPU-only in a
+  CPU job from the idempotent per-item outputs instead of re-running on the GPU (1.x
+  said "on the login node"; 2.0.0 said `srun -p short`; 2.1.0 submits it with `sbatch`
+  on `sharing` within 1 h or `short` beyond).
 
 Assertions that **both** configurations passed (gpu partition selection, budget caps,
 smoke-testing) are non-discriminating: they confirm the skill isn't wrong, but the

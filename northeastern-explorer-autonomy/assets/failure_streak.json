@@ -1,19 +1,20 @@
 {
-  "_doc": "G5 consecutive-failure auto-rollback ledger. current_streak increments ONLY on new agent-written-code bugs (including job-design bugs such as an IdleBot cancellation of a GPU job with a long CPU-only phase); infrastructure failures (HF timeout, scp race, connection/auth failures, node launch-kills, NODE_FAIL, walltime-kill of code whose checkpoints were advancing, pending time) set counted_in_streak=false and do NOT increment; an OOM follows the triage table in references/autonomy-model.md. At current_streak >= max_streak, set auto_rollback_triggered=true and downgrade all T1 auto-submits to human-approval until a HUMAN resets (the agent must not clear its own rollback). A clean new-code success resets current_streak to 0.",
+  "_doc": "G5 consecutive-failure auto-rollback ledger; the triage table in references/autonomy-model.md is canonical, and exit codes follow the contract in assets/job_template.sbatch. current_streak increments ONLY on new agent-written-code bugs, job-design bugs included: an IdleBot cancellation of a GPU job with a long CPU-only phase; a TIMEOUT from an agent-chosen wall too short for a non-resumable job; a smoke TIMEOUT during a model load when its wall was below the 45-min minimum for model-loading smokes; a pre-flight exit 2 (no GPU allocated: missing --gres?; missing cache, env not marked built, a guard) unless the cause is shown to be infrastructure; a failed self-check (exit 3); a program exit the template remapped to 1 (the program's own 2, 3 or 4 without PROGRAM_FOLLOWS_EXIT_CONTRACT=1) is triaged like any other program failure. Infrastructure sets counted_in_streak=false and does NOT increment: HF timeout, scp race, connection/auth failures, node launch-kills, NODE_FAIL, a node or driver problem caught by the pre-flight (exit 4: driver below the floor, or a GPU allocated but its driver unreadable), an early stop with a checkpoint (exit 75, including a stop signal before the work started) or a walltime kill of resumable code whose checkpoints were advancing, a cold-load smoke TIMEOUT whose wall met the 45-min minimum, a submit refused by the per-user cap, pending time. An OOM follows its triage row. exploratory_agent_code_streak counts the same bugs for hand-submitted or exploratory jobs; a pipeline success never resets it. When either counter reaches max_streak, set auto_rollback_triggered=true and downgrade all T1 auto-submits to human approval. A HUMAN resets the rollback together with the counter that tripped it. The agent may do so only under a written delegation from the human (for example: once the cause is fixed and verified by tests plus a passing smoke), quoting the delegation and the verifying job ids in the history entry. Destructive, external or scope decisions still wait for the human. A clean new-code success resets current_streak to 0.",
   "current_streak": 0,
+  "exploratory_agent_code_streak": 0,
   "max_streak": 3,
   "auto_rollback_triggered": false,
   "auto_rollback_at": null,
   "auto_rollback_reason": null,
   "history": [
     {
-      "timestamp": "2026-01-01T00:00:00-08:00",
+      "timestamp": "2026-01-01T00:00:00-05:00",
       "slurm_id": "0000000",
       "reason": "example: tensor indexing bug — AGENT CODE",
       "counted_in_streak": true
     },
     {
-      "timestamp": "2026-01-01T00:05:00-08:00",
+      "timestamp": "2026-01-01T00:05:00-05:00",
       "slurm_id": "0000001",
       "reason": "example: sbatch path mismatch — INFRASTRUCTURE",
       "counted_in_streak": false
