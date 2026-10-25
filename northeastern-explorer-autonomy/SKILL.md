@@ -1,22 +1,24 @@
 ---
 name: northeastern-explorer-autonomy
 description: >-
-  Operate the Northeastern Explorer HPC cluster (SLURM + H200 GPUs) autonomously
-  from a Claude Code session — connect, set up the pinned conda/CUDA environment,
-  submit smoke-tested SLURM jobs through a safety-verified hook layer, and run a
+  Operate the Northeastern Explorer HPC cluster (SLURM; H200, A100, V100 and T4 GPUs)
+  autonomously from a Claude Code session — connect, set up the pinned environment,
+  pick the GPU type each job fits and can start on soonest, submit smoke-tested SLURM
+  jobs through a safety-verified hook layer, and run a
   self-sustaining heartbeat loop with compute-budget and failure-streak guardrails
   so experiments run hands-off overnight. Use this whenever the user wants to run,
   submit, monitor, or schedule jobs on Explorer (login.explorer.northeastern.edu),
-  set up autonomous or overnight HPC runs, configure a research heartbeat / cron /
+  set up autonomous or overnight HPC runs, spread jobs across GPU types to avoid long
+  queues, configure a research heartbeat / cron /
   loop on a cluster, recover a stalled autonomous session, or onboard a collaborator
   to autonomous cluster operation. Trigger even when the user just says "submit this
   to the cluster", "kick off an overnight run", "watch this SLURM job", "set up my
   Explorer environment", or "let Claude run experiments on its own" — the guardrails
   and connection mechanics in here prevent the expensive footguns (silent meta-init
-  model collapse, runaway H200 spend, bug-loops) that ad-hoc cluster use hits.
+  model collapse, runaway GPU spend, bug-loops) that ad-hoc cluster use hits.
 metadata:
-  version: 1.0.0
-  tags: [hpc, slurm, explorer, northeastern, autonomy, h200, heartbeat, guardrails]
+  version: 2.0.0
+  tags: [hpc, slurm, explorer, northeastern, autonomy, gpu-selection, heartbeat, guardrails]
 ---
 
 # Operating Northeastern Explorer Autonomously with Claude Code
@@ -60,18 +62,19 @@ and never modify its own rules unilaterally.
 Everything below assumes these values. **Replace every `<…>` placeholder with your own
 account's values before first use** — the rest of the skill and the bundled
 `assets/job_template.sbatch` reference them. Values shown without brackets
-(module versions, partitions, proxy) are Explorer-wide and usually correct as-is.
+(module versions, partition names) are Explorer-wide and usually correct as-is.
 
 | Point | Placeholder → set to yours | What it is |
 |---|---|---|
-| `SSH_TARGET` | `<user>@login.explorer.northeastern.edu` | your Explorer login |
+| `SSH_ALIAS` | `<alias>` | a `Host <alias>` block in `~/.ssh/config` with `HostName login.explorer.northeastern.edu`, `User <user>`, an authorized `IdentityFile`, `ControlMaster auto`, `ControlPath`, `ControlPersist 8h`. Every ssh/scp/rsync goes through the alias. |
 | `ALLOC` | `/projects/<group>/<user>` | your persistent project allocation (NOT `/scratch`, NOT `/home`) |
 | `SLURM_ACCOUNT` | `<slurm-account>` | the `--account` your allocation bills to |
-| `CONDA_ENV` | `$ALLOC/conda_envs/<conda-env>` | your pinned conda env path |
-| `MODULES` | `miniconda3/24.11.1 cuda/12.3.0` | pinned module versions (Explorer-wide; do not float CUDA) |
-| `HF_CACHE` | `$ALLOC/hf_cache` | model cache (pre-populated on login node) |
+| `CONDA_ENV` | `$ALLOC/conda_envs/<conda-env>` | your pinned conda env path; write `<env>/.built-ok` when a build finishes (the template refuses an unmarked env) |
+| `MODULES` | `miniconda3/24.11.1` | pinned module versions (Explorer-wide). No `cuda/*` module for pip-installed torch: the wheel carries its own CUDA runtime (`references/cluster-setup.md` §3) |
+| `HF_CACHE` | `$ALLOC/hf_cache` | model cache (pre-populated by a CPU pre-cache job, never on the login node) |
+| `PROXY` | `<squid-proxy-ip>:3128` | the cluster's squid proxy (from the research-computing docs). Jobs inherit it from the login shell: export it explicitly in CPU pre-cache jobs, **unset** it in GPU jobs |
 | `MODEL_ID` / `REVISION` | `<org>/<model>` @ `<revision>` | your pinned model + commit (if you use a model hub) |
-| `DAILY_GPU_BUDGET` | `24` H200-hours | G4 soft cap per day (tune) |
+| `DAILY_GPU_BUDGET` | `24` GPU-hours | G4 soft cap per day, all types; the ledger records hours per GPU type (tune; add per-type caps if you need them) |
 | `FAIL_STREAK_MAX` | `3` | G5 consecutive-agent-bug auto-rollback threshold (tune) |
 
 If you are a **new user adapting this**, also rewrite any model-specific loader fix.
@@ -93,70 +96,87 @@ guardrails are portable; only the connection/env/partition details change.
    8h). **Always go through the configured `<alias>`, never the raw hostname** —
    connecting by hostname bypasses the `IdentityFile`/`ControlMaster` config and fails
    with a GSSAPI `Permission denied`. See `references/cluster-setup.md` §1.
-2. **Pre-cache the model on the LOGIN node** (compute nodes are offline — see G-rule
-   below). `references/cluster-setup.md` §2. Never load the model on the login node
-   itself; it has a ~8 GB effective RAM cap and will OOM-kill you.
-3. **Smoke-test the experiment on `gpu-short`** for ~60s on one input **before** any
-   `gpu` submission (Guardrail G1; ~5000:1 cost asymmetry). Validate the **actual
-   artifact you'll submit**: include at least one real `sbatch` smoke, not only an
-   interactive `srun` — `srun` streams stdout over SSH and writes no output file, so it
-   silently skips the failures (output-file creation, node prolog/launch) that only
-   appear under `sbatch`.
-4. **Compose the sbatch from `assets/job_template.sbatch`** — it already encodes the
-   pinned modules, the PATH-export env activation, mandatory offline flags, cache
-   paths, determinism, a pre-flight model-cache check, and a SIGTERM save-hook.
+2. **Pre-cache the model in a CPU job (`srun -p short`), never on the login node**, then
+   prove an offline load works in that same CPU job before any GPU time is spent (GPU
+   jobs run offline — see the rule below). `references/cluster-setup.md` §2. The login
+   node has a ~8 GB effective RAM cap and kills heavy work silently.
+3. **Smoke-test the experiment locally or on `gpu-short`** for ~60s on one input
+   **before** any `gpu` submission (Guardrail G1; ~5000:1 cost asymmetry). Validate the
+   **actual artifact you'll submit**: include at least one real `sbatch` smoke, not only
+   an interactive `srun` — `srun` streams stdout over SSH and writes no output file, so
+   it silently skips the failures (output-file creation, node prolog/launch) that only
+   appear under `sbatch`. For anything expected to run more than a few GPU-hours, shape
+   it with `references/long-job-patterns.md` first — interleaved shards, resumable
+   checkpoints, and a saturation check routinely halve real spend.
+4. **Choose the GPU type, then compose the sbatch.** Never hard-code one type: pick the
+   one that fits the smoke's measured memory, that your env's torch build supports, and
+   that can start soonest given free GPUs and your QOS caps
+   (`references/cluster-setup.md` §5.1). Sweeps can split across several free types.
+   Compose from `assets/job_template.sbatch` — it already encodes the
+   pinned module, the PATH-export env activation, mandatory offline flags, cache
+   paths, determinism, a pre-flight model-cache check, and an early-signal checkpoint hook.
 5. **Verify, then submit.** A PreToolUse hook should run a per-job verifier before the
    `sbatch` lands (see `references/safety-hooks.md`). Submitting fires a job ID.
-6. **Arm a persistent Monitor** on the SLURM log filtered to terminal states
-   (`COMPLETED|FAILED|TIMEOUT|CANCELLED`). For any job >1h, `persistent: true` —
-   a missing log file is NOT a dead-monitor signal (the persistent-Monitor rule).
+6. **Arm a persistent Monitor on the scheduler, not the log**: poll
+   `sacct -j <id> -X -n -o State` every ~120 s until a terminal state. Slurm never
+   writes COMPLETED or FAILED into the job log, and a launch-kill writes no log at all.
+   For any job >1h, `persistent: true` (the persistent-Monitor rule). See
+   `references/heartbeat-loop.md`.
 7. **On wakeup, intake the result**, update your state ledgers, record success/failure
    in the failure streak, and let the decision loop pick the next action.
 8. **If running unattended,** keep the loop alive with `/loop 30m ...` (self-paced) or
-   a `CronCreate` cadence, or `/schedule` for a durable cloud agent. Use a 1200–1800s
-   interval, **never 300s** (cache-window thrash). See `references/heartbeat-loop.md`.
+   a `CronCreate` cadence, or a Desktop scheduled task for a durable local tick (cloud
+   `/schedule` routines cannot reach the cluster); re-arm session loops before their
+   7-day expiry. Use a 1200–1800s interval, **never 300s** (cache-window thrash). See
+   `references/heartbeat-loop.md`.
 
 ## The one rule that prevents the most expensive failure
 
-**Compute nodes on Explorer have no internet (no Squid proxy passthrough).** A
-HuggingFace load without offline mode silently 503s and falls back to **meta-init
-zeros** — the model loads "successfully" and then generates garbage forever, burning
-your whole walltime on noise. So on **every** compute-node job:
+**GPU jobs run offline.** Compute nodes reach the internet only through the squid
+proxy (`PROXY`), and jobs inherit it from the login shell by default. Export it
+explicitly only in CPU pre-cache jobs; **unset it in every GPU job** and set the
+offline flags, so a missing file fails loudly at load time instead of the job hanging,
+retrying, or silently resolving a different revision mid-run:
 
 ```bash
-export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1     # in the sbatch
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1   # in the sbatch
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY; export no_proxy=localhost,127.0.0.1
 ```
 ```python
 AutoModel...from_pretrained(MODEL_ID, revision=REV, local_files_only=True)  # in Python
 ```
 
 Pre-caching (step 2) and offline-mode (this rule) are an inseparable pair — neither
-works without the other. Full reasoning in `references/cluster-setup.md` §4.
+works without the other. Some libraries call the hub API even for cached files and
+crash under offline mode, which is why step 2 ends with an offline load test on a CPU
+node. Full reasoning in `references/cluster-setup.md` §2 and §4.
 
-### Field-tested gotchas (from the first real end-to-end run)
+### Field-tested gotchas
 
-These are **infrastructure** failures — none of them increments the G5 streak. Diagnose
-before "fixing" the wrong layer; full recipes in `references/cluster-setup.md`.
+The first two are **infrastructure** failures — neither increments the G5 streak.
+Diagnose before "fixing" the wrong layer; full recipes in `references/cluster-setup.md`
+§6 and §9.
 
 - **Node launch-kills.** Symptom: an `sbatch` job dies in 1–5s with `State=FAILED`, the
   `.batch` step `CANCELLED`, a signal-style `ExitCode` (e.g. `0:53`), the `.extern` step
   `COMPLETED`, and **no output log** (killed before the script's first line). This is a
   bad **node**, not a code bug or preemption. Diagnostic ladder: get the node from
   `sacct` `NodeList`; run a **minimal canary** (no model, tiny mem, short time, trivial
-  payload) — if it succeeds on a *different* node, the original node(s) are bad; rule out
-  systemic causes (cluster `PreemptMode`, QOS limits, active reservations via
-  `scontrol show reservations`, output-dir writability, any cron/watchdog) so you don't
-  mis-fix. Fix: add `#SBATCH --exclude=<bad-nodes>` and resubmit.
-- **Short-partition timeout + reservation sizing.** A short-walltime partition can
+  payload, **same GPU type** as the failed job) — if it succeeds on a *different* node,
+  the original node(s) are bad; rule out systemic causes (the job's fail reason, QOS
+  limits, output-dir writability, maintenance reservations) so you don't mis-fix. Fix:
+  add `#SBATCH --exclude=<bad-nodes>` and resubmit.
+- **Short-partition timeout of finished work.** A short-walltime partition can
   **TIMEOUT a job that finished its real work** but not the final aggregation/write.
   Defend by writing per-item outputs as you go (idempotent skip-existing) and aggregating
-  from them; if you time out near the end, **re-aggregate CPU-only on the login node**
-  from the per-item files — no GPU re-run. A "short" partition often shares physical
-  nodes with the main GPU partition, and free slots can be **reserved for a
-  higher-priority partition**, so even a tiny job pends or gets launch-killed — check
-  `scontrol show reservations` and partition `PreemptMode` before assuming "idle ==
-  available." Shorter walltime backfills better, but estimate real runtime from the
-  smoke's per-item time and don't undercut it.
+  from them; if you time out near the end, re-aggregate CPU-only from the per-item files
+  inside `srun -p short`, **never on the login node** — no GPU re-run. Size `--time` from
+  the smoke's per-item time and don't undercut it.
+- **Submission plumbing that fails silently.** `sbatch --export=ALL,IDX=1,2,3` splits on
+  the commas, so the job sees `IDX=1` and still exits 0 — pass lists through the
+  environment (`IDX=1,2,3 sbatch ...`) and assert the logged list equals the requested
+  one. `ssh <alias> 'nohup srun ... &'` holds the ssh call open until srun ends; use
+  `sbatch` for anything longer than a few seconds.
 
 ## The autonomy model (how to decide what to do without asking)
 
@@ -170,8 +190,9 @@ Classify every candidate action into a **tier**, and gate the auto-acting tier b
   ≤ a walltime cap, **only if all five guardrails pass**.
 - **T2 — do it, but surface in the next heartbeat:** new experiment designs, large
   code changes, new-checkpoint/cross-family runs.
-- **T3 — never auto; escalate to the human:** destructive ops (`rm -rf`, force-push,
-  cancelling others' jobs), external comms, **modifying your own protocol or the
+- **T3 — never auto; escalate to the human:** destructive ops (`rm -rf`, force-push;
+  cancelling, holding or modifying any job outside your project's job-name prefix,
+  even under your own user), external comms, **modifying your own protocol or the
   user's CLAUDE.md**, touching restricted/production artifacts.
 
 The **five guardrails** that gate T1:
@@ -181,18 +202,17 @@ The **five guardrails** that gate T1:
 | **G1** | Smoke-test gate | 60s single-input run passed **via at least one real `sbatch`** (not only `srun` — `srun` writes no output file and skips launch/prolog failures), or script unchanged from a prior success |
 | **G2** | Pre-registration | falsification criteria written **before** the run |
 | **G3** | Info-gain | experiment discriminates between live hypotheses (≥ 0.3 if you score it) |
-| **G4** | Daily compute budget | under `DAILY_GPU_BUDGET` H200-h today (`.compute_budget.json`) |
+| **G4** | Daily compute budget | under `DAILY_GPU_BUDGET` GPU-h today, recorded per GPU type (`.compute_budget.json`) |
 | **G5** | Failure-streak rollback | not under auto-rollback (`< FAIL_STREAK_MAX` consecutive **agent-code** bugs) |
 
-G5's subtlety: **infrastructure failures don't count** (HF timeout, scp race, a
-walltime-kill of code that was working). Only new agent-written-code bugs increment the
-streak. This prevents bug-loops — the most expensive autonomous failure mode — while
-not punishing the agent for the cluster being flaky. Concrete examples that are
-**infrastructure, not agent-code, and must NOT increment the streak**: a **node
-launch-kill** (job dies in 1–5s with no log written), a **walltime-timeout of code that
-finished its real work** but not the final aggregation, and **partition contention** (a
-tiny job pends or gets launch-killed because free slots are reserved for a
-higher-priority partition). See the field-tested gotchas below.
+G5's subtlety: only new agent-written-code bugs increment the streak. **Infrastructure
+failures don't count:** HF timeouts, scp races, connection/auth failures, node
+launch-kills, NODE_FAIL, a walltime timeout of code whose checkpoints were advancing,
+and pending time. **Counts as agent code:** an IdleBot cancellation of a job the agent
+designed with a long CPU-only phase inside a GPU allocation (a job-design bug). This
+prevents bug-loops — the most expensive autonomous failure mode — while not punishing
+the agent for the cluster being flaky. See the field-tested gotchas above and the
+triage table in `references/autonomy-model.md`.
 
 ## The safety layer (make the verified path the only path)
 
@@ -201,7 +221,7 @@ Autonomy is only safe if the *submit* action is hard to get wrong. Wire two thin
 
 1. **PreToolUse hooks** that intercept `sbatch`/`Edit`/`commit` and run a check
    *before* the call lands — blocking on failure so you see it inline.
-2. **Per-job verifiers** (`verify_<job>.sh`) that enforce, before any H200 burns:
+2. **Per-job verifiers** (`verify_<job>.sh`) that enforce, before any GPU-hour burns:
    the script + sbatch exist, `--smoke` ran clean, offline flags are set,
    pre-registration constant present, and — critically (the end-to-end wiring check) —
    that a with-intervention run produces **different output** than without. A registered
@@ -215,8 +235,9 @@ bounded (**≤25 tool calls, ≤300-word report**) and walks a fixed step sequen
 re-anchor state → audit consistency → check for landed jobs → integrate results →
 update tournament/claims → run guardrail checks → maybe submit the next job → log →
 emit report → **reschedule itself**. Full step list, cron setup, the `/loop` /
-`CronCreate` / `/schedule` mechanisms, durability caveats, and the cache-window delay
-rule are in `references/heartbeat-loop.md`.
+`CronCreate` / Desktop-task mechanisms, durability caveats (7-day expiry; Monitor tasks
+are not restored on resume), and the cache-window delay rule are in
+`references/heartbeat-loop.md`.
 
 Compose it with the Monitor: **cron-fired heartbeat** (periodic, broad) + **persistent
 Monitor** (event-driven, fires ~1 min after a job hits a terminal state) = jobs get
@@ -225,14 +246,22 @@ integrated promptly without polling, and the loop survives even if one mechanism
 ## Reference files (read the one you need)
 
 - `references/cluster-setup.md` — connection, allocation/storage, env activation,
-  offline rules, the canonical sbatch anatomy, and model-loader gotchas. **Read first
+  offline rules, the canonical sbatch anatomy, model-loader gotchas, and the
+  laptop↔cluster data-movement rules (never sync by deletion). **Read first
   when setting up a session or writing a new job.**
-- `references/autonomy-model.md` — T0–T3 tiers, G1–G5 guardrails, and the
+- `references/autonomy-model.md` — T0–T3 tiers, G1–G5 guardrails, the
+  sacct-signature failure-triage table (agent-code vs infrastructure), and the
   `.compute_budget.json` / `.failure_streak.json` ledger shapes + semantics.
-- `references/heartbeat-loop.md` — the tick protocol, cron / `/loop` / `/schedule`,
+- `references/heartbeat-loop.md` — the tick protocol, cron / `/loop` / Desktop tasks,
   persistent-Monitor wiring, and how they compose into hands-off overnight runs.
 - `references/safety-hooks.md` — PreToolUse hook wiring and the per-job verifier
   pattern (with the reusable `_lib.sh` helper set).
+- `references/long-job-patterns.md` — field-tested patterns for multi-day GPU
+  campaigns: interleaved sharding with checked
+  merges, resumable/idempotent shard jobs, budget estimation from a smoke shard,
+  memory-adaptive batching, saturation-before-spending, artifact stamping,
+  fp16-store/fp32-load, and the generalized loader trust check. **Read before
+  designing any fit or sweep expected to exceed a few GPU-hours.**
 
 ## Bundled assets
 

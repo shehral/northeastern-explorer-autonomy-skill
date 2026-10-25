@@ -2,7 +2,7 @@
 
 Autonomy is only safe if the **submit** action is hard to get wrong. This layer makes
 the verified path the only path: a hook intercepts the `sbatch` *before* it lands and
-runs a per-job verifier that refuses to let a broken experiment burn H200-hours.
+runs a per-job verifier that refuses to let a broken experiment burn GPU-hours.
 
 Two complementary mechanisms:
 1. **PreToolUse hooks** — intercept a tool call before it executes; block on failure.
@@ -67,8 +67,8 @@ Synthesized across real verifiers — adapt the domain-specific ones:
 
 1. **Existence** — the referenced Python script and sbatch file both exist.
 2. **Static structure** — required flags present (`--smoke`), required pre-registration
-   constant present (G2), required env in the sbatch (`HF_HUB_OFFLINE=1` — the offline
-   rule, see `cluster-setup.md` §4).
+   constant present (G2), required env in the sbatch (`HF_HUB_OFFLINE=1` and the inherited
+   proxy unset — the offline rule, see `cluster-setup.md` §4).
 3. **Smoke integrity** — `--smoke` runs without crashing, and produces a *discriminating*
    signal (e.g. a trained direction's norm > 0, an AUC that differs from a shuffled
    baseline). A smoke test that passes trivially isn't a gate.
@@ -80,11 +80,17 @@ Synthesized across real verifiers — adapt the domain-specific ones:
 5. **Norm-matched controls (where applicable)** — if you use an inverse/random control,
    verify its vector norm is within ~10% of the real perturbation, so a "control
    perturbs more" result isn't just norm-shock.
+6. **The scheduler accepts it.** `sbatch --test-only <same flags> <file>` succeeds. This
+   catches a wrong account, partition, gres type or time before a slot or a dependency
+   chain is spent. Do not use its start estimate to choose a GPU type
+   (`cluster-setup.md` §5.1 step 5). It is unverified whether it rejects a request over
+   the per-job GPU cap, so check that cap (§5) yourself.
 
 ### Degrade gracefully, never block on missing infrastructure
 A verifier run on a dev box (no GPU, no smoke fixture) should fall back to **static
-checks only** and PASS with a WARN — never FAIL for lack of a fixture. On the login
-node (fixture cached), it runs the full smoke with numerical assertions. The rule:
+checks only** and PASS with a WARN — never FAIL for lack of a fixture. In a short CPU
+job on the cluster (fixture cached; never on the login node, which kills heavy work
+silently), it runs the full smoke with numerical assertions. The rule:
 always provide *some* coverage; never make the absence of infrastructure a hard stop.
 
 ## Why this layer is what makes autonomy sustainable

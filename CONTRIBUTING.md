@@ -11,7 +11,7 @@ The skill deliberately separates two layers. Keep them separate.
 
 A change that entangles the two (e.g. hard-coding an Explorer detail into the guardrail logic) will be asked to be refactored. When in doubt, ask: "would this still make sense on a different cluster?" If yes, it's methodology; keep it generic.
 
-**Account-specific values stay as `<placeholder>` tokens.** Everything personal lives in one place: the **Customization Points** table in `SKILL.md`. Login targets, allocations, accounts, env paths, and model IDs are written as `<user>`, `<group>`, `<slurm-account>`, `<conda-env>`, `<org>/<model>`, etc. Explorer-wide constants (module versions, the proxy, partition names) may appear literally, since they are correct for every user of the cluster. Never replace a placeholder with a real value.
+**Account-specific values stay as `<placeholder>` tokens.** Everything personal lives in one place: the **Customization Points** table in `SKILL.md`. Login targets, allocations, accounts, env paths, and model IDs are written as `<user>`, `<group>`, `<slurm-account>`, `<conda-env>`, `<org>/<model>`, etc. Explorer-wide constants (module versions, partition and QOS names, GPU type names) may appear literally, since they are correct for every user of the cluster. Site addresses such as the proxy stay placeholders (`<squid-proxy-ip>`). Never replace a placeholder with a real value.
 
 ## 2. How to propose changes
 
@@ -22,7 +22,7 @@ A change that entangles the two (e.g. hard-coding an Explorer detail into the gu
 
 ## 3. How to test a change
 
-Use the skill-creator eval loop. The prompt set lives at `evals/evals.json` — three task prompts that exercise the core behaviors (overnight self-managing run, heartbeat/Monitor setup, garbage-output and no-op debug), each with an `expected_output` describing what a correct answer must cover.
+Use the skill-creator eval loop. The prompt set lives at `evals/evals.json` — six task prompts that exercise the core behaviors (overnight self-managing run, heartbeat/Monitor setup, garbage-output and no-op debug, first-real-run field test, GPU-type placement, a job pending forever plus a resumed session), each with an `expected_output` describing what a correct answer must cover.
 
 The benchmark idea, at a high level:
 
